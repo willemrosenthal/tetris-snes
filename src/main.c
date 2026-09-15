@@ -23,6 +23,10 @@
 #define EMPTY 0
 #define MAX_CELLS 4
 #define GEN_COLORS 5 /* prefab totalColors: pieces use colors 0..4 */
+#define WILD 99      /* field value / cellColor marker: matches any color */
+#define BOMB 98      /* cellColor marker for an active bomb piece */
+#define WILD_CHANCE 5  /* percent, per cell (prefab wildChance 0.05) */
+#define BOMB_CHANCE 10 /* percent, per piece */
 
 // field[x][y]: 0 = empty, otherwise (color index + 1)
 u8 field[GRID_W][GRID_H];
@@ -52,8 +56,9 @@ const Shape SHAPES[] = {
 // Active piece state
 u8 cellCount;
 s8 curX[MAX_CELLS], curY[MAX_CELLS]; // current (rotated) offsets
-u8 cellColor[MAX_CELLS];             // per-cell color 0..GEN_COLORS-1
+u8 cellColor[MAX_CELLS];             // per-cell color 0..GEN_COLORS-1, or WILD/BOMB
 int pieceX, pieceY;                  // anchor cell
+u8 pieceIsBomb;                      // current piece is a bomb
 
 u8 dirty;
 u16 score;
@@ -101,6 +106,18 @@ void spawnPiece(void)
     u8 i, s, c0, c1;
     s8 maxx = 0;
 
+    pieceIsBomb = (randn(100) < BOMB_CHANCE);
+    if (pieceIsBomb)
+    {
+        cellCount = 1;
+        curX[0] = 0; curY[0] = 0;
+        cellColor[0] = BOMB;
+        pieceX = GRID_W / 2;
+        pieceY = 0;
+        dirty = 1;
+        return;
+    }
+
     s = randn(NUM_SHAPES);
     cellCount = SHAPES[s].n;
     for (i = 0; i < cellCount; i++)
@@ -110,11 +127,12 @@ void spawnPiece(void)
         if (curX[i] > maxx) maxx = curX[i];
     }
 
-    // Pick 2 colors; each cell is one of the two (per TetrisBlockGroup.ChooseBricks)
+    // Pick 2 colors; each cell is one of the two, with a small wild chance
+    // (per TetrisBlockGroup.ChooseBricks).
     c0 = randn(GEN_COLORS);
     c1 = randn(GEN_COLORS);
     for (i = 0; i < cellCount; i++)
-        cellColor[i] = (rand() & 1) ? c1 : c0;
+        cellColor[i] = (randn(100) < WILD_CHANCE) ? WILD : ((rand() & 1) ? c1 : c0);
 
     pieceX = (GRID_W - 1 - maxx) / 2;
     pieceY = 0;
@@ -168,54 +186,56 @@ void tryRotate(int dir)
     dirty = 1;
 }
 
-// Clear horizontal/vertical runs of >=3 same color, but only runs that include
-// at least one block NOT just placed (so a piece can't clear against itself).
+// A cell matches color-run value v if it is that color or a wild (which stands
+// in for any color). Wild cells never initiate a run (matches TetrisBlock: wilds
+// return early), but they are swept up into a run they help complete.
+#define MATCHES(cell, v) ((cell) == (v) || (cell) == WILD)
+
+// Clear horizontal/vertical runs of >=3 (same color, wilds acting as bridges),
+// but only runs including at least one block NOT just placed (so a piece can't
+// clear against itself).
 void resolveMatches(void)
 {
     u8 clear[GRID_W][GRID_H];
-    u8 x, y, run, c, i, hasOld;
+    u8 x, y, v, hasOld;
+    int a, b, i;
     u16 n = 0;
 
     for (x = 0; x < GRID_W; x++)
         for (y = 0; y < GRID_H; y++)
             clear[x][y] = 0;
 
-    for (y = 0; y < GRID_H; y++)     // horizontal
-    {
-        x = 0;
-        while (x < GRID_W)
+    for (y = 0; y < GRID_H; y++)          // horizontal
+        for (x = 0; x < GRID_W; x++)
         {
-            c = field[x][y];
-            if (c == EMPTY) { x++; continue; }
-            run = 1;
-            while (x + run < GRID_W && field[x + run][y] == c) run++;
-            if (run >= 3)
+            v = field[x][y];
+            if (v == EMPTY || v == WILD) continue; // only real colors initiate
+            a = x; b = x;
+            while (a - 1 >= 0 && MATCHES(field[a - 1][y], v)) a--;
+            while (b + 1 < GRID_W && MATCHES(field[b + 1][y], v)) b++;
+            if (b - a + 1 >= 3)
             {
                 hasOld = 0;
-                for (i = 0; i < run; i++) if (!justPlaced[x + i][y]) { hasOld = 1; break; }
-                if (hasOld) for (i = 0; i < run; i++) clear[x + i][y] = 1;
+                for (i = a; i <= b; i++) if (!justPlaced[i][y]) { hasOld = 1; break; }
+                if (hasOld) for (i = a; i <= b; i++) clear[i][y] = 1;
             }
-            x += run;
         }
-    }
-    for (x = 0; x < GRID_W; x++)     // vertical
-    {
-        y = 0;
-        while (y < GRID_H)
+
+    for (x = 0; x < GRID_W; x++)          // vertical
+        for (y = 0; y < GRID_H; y++)
         {
-            c = field[x][y];
-            if (c == EMPTY) { y++; continue; }
-            run = 1;
-            while (y + run < GRID_H && field[x][y + run] == c) run++;
-            if (run >= 3)
+            v = field[x][y];
+            if (v == EMPTY || v == WILD) continue;
+            a = y; b = y;
+            while (a - 1 >= 0 && MATCHES(field[x][a - 1], v)) a--;
+            while (b + 1 < GRID_H && MATCHES(field[x][b + 1], v)) b++;
+            if (b - a + 1 >= 3)
             {
                 hasOld = 0;
-                for (i = 0; i < run; i++) if (!justPlaced[x][y + i]) { hasOld = 1; break; }
-                if (hasOld) for (i = 0; i < run; i++) clear[x][y + i] = 1;
+                for (i = a; i <= b; i++) if (!justPlaced[x][i]) { hasOld = 1; break; }
+                if (hasOld) for (i = a; i <= b; i++) clear[x][i] = 1;
             }
-            y += run;
         }
-    }
 
     for (x = 0; x < GRID_W; x++)
         for (y = 0; y < GRID_H; y++)
@@ -229,15 +249,43 @@ void resolveMatches(void)
     }
 }
 
+// Bomb: clear this cell and its 8 neighbors (per TetrisBlock.BombExplode).
+void explodeBomb(int bx, int by)
+{
+    int dx, dy, x, y;
+    u16 n = 0;
+    for (dx = -1; dx <= 1; dx++)
+        for (dy = -1; dy <= 1; dy++)
+        {
+            x = bx + dx; y = by + dy;
+            if (x >= 0 && x < GRID_W && y >= 0 && y < GRID_H && field[x][y] != EMPTY)
+            {
+                field[x][y] = EMPTY;
+                n++;
+            }
+        }
+    if (n > 0) { score += n * 50; dirty = 1; }
+}
+
 void placePiece(void)
 {
     u8 i;
     if (!canPlace())
         return; // overlap -> rejected
 
+    if (pieceIsBomb)
+    {
+        int bx = pieceX + curX[0], by = pieceY + curY[0];
+        field[bx][by] = 1;      // temp non-empty so the bomb cell is counted
+        explodeBomb(bx, by);
+        spawnPiece();
+        return;
+    }
+
     for (i = 0; i < cellCount; i++)
     {
-        field[pieceX + curX[i]][pieceY + curY[i]] = cellColor[i] + 1;
+        field[pieceX + curX[i]][pieceY + curY[i]] =
+            (cellColor[i] == WILD) ? WILD : cellColor[i] + 1;
         justPlaced[pieceX + curX[i]][pieceY + curY[i]] = 1;
     }
 
@@ -280,14 +328,20 @@ void drawGrid(void)
 
     for (y = 0; y < GRID_H; y++)
         for (x = 0; x < GRID_W; x++)
-            cells[x][y] = (field[x][y] != EMPTY) ? PLACED_CH[field[x][y] - 1] : '.';
+        {
+            u8 v = field[x][y];
+            cells[x][y] = (v == EMPTY) ? '.' : (v == WILD) ? '?' : PLACED_CH[v - 1];
+        }
 
     for (i = 0; i < cellCount; i++)
     {
         int cx = pieceX + curX[i];
         int cy = pieceY + curY[i];
+        char g = (cellColor[i] == BOMB) ? '@'
+               : (cellColor[i] == WILD) ? 'W'
+               : ACTIVE_CH[cellColor[i]];
         if (cx >= 0 && cx < GRID_W && cy >= 0 && cy < GRID_H)
-            cells[cx][cy] = (field[cx][cy] != EMPTY) ? '*' : ACTIVE_CH[cellColor[i]];
+            cells[cx][cy] = (field[cx][cy] != EMPTY) ? '*' : g;
     }
 
     for (y = 0; y < GRID_H; y++)

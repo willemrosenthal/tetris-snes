@@ -1,0 +1,48 @@
+# Phase 4c bomb test
+wait 40
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press a 12
+wait 12
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press a 12
+wait 12
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press a 12
+wait 12
+shot b1_cluster
+press select 12
+wait 8
+shot b2_bomb
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press a 12
+wait 14
+shot b3_boom
+stop
