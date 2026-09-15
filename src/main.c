@@ -79,6 +79,25 @@ u8 speedPct;      // 0..100 acceleration (marbleSpawnTimer speeds up over time)
 // (4 tiles) recolored by 5 palettes. Console text HUD stays on bg 0.
 extern char blocktiles, blocktiles_end;
 extern char gridtiles, gridtiles_end;
+extern char frametiles, frametiles_end;
+
+// Frame nine-patch tile numbers in BG3 VRAM (loaded right after the 9 grid tiles).
+#define FR_BASE 9              // grid uses BG3 tiles 0..8; frame starts at 9
+#define FR_TL (FR_BASE + 0)
+#define FR_T  (FR_BASE + 1)
+#define FR_TR (FR_BASE + 2)
+#define FR_L  (FR_BASE + 3)
+#define FR_R  (FR_BASE + 5)
+#define FR_BL (FR_BASE + 6)
+#define FR_B  (FR_BASE + 7)
+#define FR_BR (FR_BASE + 8)
+#define FR_PAL (2 << 10)       // BG3 palette 2 (CGRAM 8-11)
+
+// Play area bounds in 8x8 tiles (9x12 blocks = 18x24 tiles); frame rings this.
+#define PA_X0 PF_TX
+#define PA_Y0 PF_TY
+#define PA_X1 (PF_TX + 2 * GRID_W - 1)
+#define PA_Y1 (PF_TY + 2 * GRID_H - 1)
 
 #define BG1_CHR 0x0000   // VRAM word addr of BG1 tiles (tile 0 = blank)
 #define BG1_MAP 0x5000   // VRAM word addr of BG1 tilemap (32x32)
@@ -426,20 +445,43 @@ void gfxInit(void)
     // BG3 real purple grid: load the 9 tiles + 4 grid colors (palette 1, CGRAM
     // 4-7), then tile the interior grid pattern across the whole background.
     dmaCopyVram((u8 *)&gridtiles, BG3_CHR, (u16)(&gridtiles_end - &gridtiles));
+    // Frame tiles load right after the grid tiles (2bpp = 8 words/tile).
+    dmaCopyVram((u8 *)&frametiles, BG3_CHR + FR_BASE * 8,
+                (u16)(&frametiles_end - &frametiles));
     setPaletteColor(4, RGB15(82, 24, 189));   // grid idx0 (accent; unused in interior)
     setPaletteColor(5, RGB15(41, 41, 90));    // grid idx1 (dash)
     setPaletteColor(6, RGB15(24, 24, 65));    // grid idx2 (dark dash)
     setPaletteColor(7, RGB15(65, 65, 115));   // grid idx3 (field)
+    setPaletteColor(9, RGB15(65, 65, 115));   // frame idx1: field
+    setPaletteColor(10, RGB15(40, 139, 191)); // frame idx2: blue
+    setPaletteColor(11, RGB15(64, 248, 248)); // frame idx3: cyan
     {
         u8 tx, ty;
         for (ty = 0; ty < 32; ty++)
             for (tx = 0; tx < 32; tx++)
             {
-                // Interior 2x2 repeat, matching play-area.png source map:
-                //   even row: odd col=7, even col=8;  odd row: odd col=4, even col=5.
+                // Interior 2x2 grid repeat (palette 1), matching play-area.png.
                 u16 tile = (ty & 1) ? ((tx & 1) ? 4 : 5) : ((tx & 1) ? 7 : 8);
-                bg3map[ty * 32 + tx] = tile | (1 << 10); // palette 1
+                bg3map[ty * 32 + tx] = tile | (1 << 10);
             }
+    }
+    // Frame ring (nine-patch) hugging the play area, palette 2.
+    {
+        u8 x, y;
+        bg3map[(PA_Y0 - 1) * 32 + (PA_X0 - 1)] = FR_TL | FR_PAL;
+        bg3map[(PA_Y0 - 1) * 32 + (PA_X1 + 1)] = FR_TR | FR_PAL;
+        bg3map[(PA_Y1 + 1) * 32 + (PA_X0 - 1)] = FR_BL | FR_PAL;
+        bg3map[(PA_Y1 + 1) * 32 + (PA_X1 + 1)] = FR_BR | FR_PAL;
+        for (x = PA_X0; x <= PA_X1; x++)
+        {
+            bg3map[(PA_Y0 - 1) * 32 + x] = FR_T | FR_PAL;
+            bg3map[(PA_Y1 + 1) * 32 + x] = FR_B | FR_PAL;
+        }
+        for (y = PA_Y0; y <= PA_Y1; y++)
+        {
+            bg3map[y * 32 + (PA_X0 - 1)] = FR_L | FR_PAL;
+            bg3map[y * 32 + (PA_X1 + 1)] = FR_R | FR_PAL;
+        }
     }
     bgSetGfxPtr(2, BG3_CHR);
     bgSetMapPtr(2, BG3_MAP, SC_32x32);

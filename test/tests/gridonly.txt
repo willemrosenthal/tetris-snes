@@ -1,3 +1,0 @@
-wait 40
-shot gridonly
-stop

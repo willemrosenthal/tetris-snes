@@ -1,9 +1,16 @@
 wait 40
-shot g1
 press down 6
 press down 6
 press down 6
 press down 6
+press a 8
+wait 12
+press down 6
+press down 6
+press down 6
+press down 6
+press left 6
+press left 6
 press a 8
 wait 12
 press down 6
@@ -16,7 +23,9 @@ press down 6
 press down 6
 press down 6
 press down 6
+press right 6
+press right 6
 press a 8
 wait 12
-shot g2
+shot fb
 stop
