@@ -261,14 +261,15 @@ void tryRotate(int dir)
 #define MATCHES(cell, v) ((cell) == (v) || (cell) == WILD)
 
 // Clear horizontal/vertical runs of >=3 (same color, wilds acting as bridges).
-// A run clears only if it CONNECTS the just-placed piece to existing blocks:
-// it must contain at least one just-placed cell AND at least one pre-existing
-// cell. (A run wholly inside the new piece can't self-clear; a run of only old
-// blocks that the new piece didn't touch is left alone.)
+// A run is SEEDED if it connects the just-placed piece to existing blocks (has
+// both a just-placed cell and a pre-existing cell) -- this prevents a piece from
+// self-clearing. Clearing then PROPAGATES: any >=3 run that shares a cell with an
+// already-clearing run also clears (transitive), matching the Unity flood. This
+// makes a completed plus (+) clear BOTH crossing rows, not just the seeded one.
 void resolveMatches(void)
 {
     u8 clear[GRID_W][GRID_H];
-    u8 x, y, v, hasOld, hasNew;
+    u8 x, y, v, hasOld, hasNew, hits, changed;
     int a, b, i;
     u16 n = 0;
 
@@ -276,39 +277,50 @@ void resolveMatches(void)
         for (y = 0; y < GRID_H; y++)
             clear[x][y] = 0;
 
-    for (y = 0; y < GRID_H; y++)          // horizontal
-        for (x = 0; x < GRID_W; x++)
-        {
-            v = field[x][y];
-            if (v == EMPTY || v == WILD) continue; // only real colors initiate
-            a = x; b = x;
-            while (a - 1 >= 0 && MATCHES(field[a - 1][y], v)) a--;
-            while (b + 1 < GRID_W && MATCHES(field[b + 1][y], v)) b++;
-            if (b - a + 1 >= 3)
-            {
-                hasOld = hasNew = 0;
-                for (i = a; i <= b; i++)
-                    if (justPlaced[i][y]) hasNew = 1; else hasOld = 1;
-                if (hasOld && hasNew) for (i = a; i <= b; i++) clear[i][y] = 1;
-            }
-        }
+    do
+    {
+        changed = 0;
 
-    for (x = 0; x < GRID_W; x++)          // vertical
-        for (y = 0; y < GRID_H; y++)
-        {
-            v = field[x][y];
-            if (v == EMPTY || v == WILD) continue;
-            a = y; b = y;
-            while (a - 1 >= 0 && MATCHES(field[x][a - 1], v)) a--;
-            while (b + 1 < GRID_H && MATCHES(field[x][b + 1], v)) b++;
-            if (b - a + 1 >= 3)
+        for (y = 0; y < GRID_H; y++)          // horizontal runs
+            for (x = 0; x < GRID_W; x++)
             {
-                hasOld = hasNew = 0;
+                v = field[x][y];
+                if (v == EMPTY || v == WILD) continue; // only real colors initiate
+                a = x; b = x;
+                while (a - 1 >= 0 && MATCHES(field[a - 1][y], v)) a--;
+                while (b + 1 < GRID_W && MATCHES(field[b + 1][y], v)) b++;
+                if (b - a + 1 < 3) continue;
+                hasOld = hasNew = hits = 0;
                 for (i = a; i <= b; i++)
-                    if (justPlaced[x][i]) hasNew = 1; else hasOld = 1;
-                if (hasOld && hasNew) for (i = a; i <= b; i++) clear[x][i] = 1;
+                {
+                    if (justPlaced[i][y]) hasNew = 1; else hasOld = 1;
+                    if (clear[i][y]) hits = 1;
+                }
+                if ((hasNew && hasOld) || hits)         // seed or propagate
+                    for (i = a; i <= b; i++)
+                        if (!clear[i][y]) { clear[i][y] = 1; changed = 1; }
             }
-        }
+
+        for (x = 0; x < GRID_W; x++)          // vertical runs
+            for (y = 0; y < GRID_H; y++)
+            {
+                v = field[x][y];
+                if (v == EMPTY || v == WILD) continue;
+                a = y; b = y;
+                while (a - 1 >= 0 && MATCHES(field[x][a - 1], v)) a--;
+                while (b + 1 < GRID_H && MATCHES(field[x][b + 1], v)) b++;
+                if (b - a + 1 < 3) continue;
+                hasOld = hasNew = hits = 0;
+                for (i = a; i <= b; i++)
+                {
+                    if (justPlaced[x][i]) hasNew = 1; else hasOld = 1;
+                    if (clear[x][i]) hits = 1;
+                }
+                if ((hasNew && hasOld) || hits)
+                    for (i = a; i <= b; i++)
+                        if (!clear[x][i]) { clear[x][i] = 1; changed = 1; }
+            }
+    } while (changed);
 
     for (x = 0; x < GRID_W; x++)
         for (y = 0; y < GRID_H; y++)
