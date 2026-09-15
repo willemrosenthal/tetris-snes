@@ -87,14 +87,17 @@ extern char blocktiles, blocktiles_end;
 // SNES BGR15 color from 8-bit RGB
 #define RGB15(r, g, b) (((u16)((b) >> 3) << 10) | ((u16)((g) >> 3) << 5) | ((r) >> 3))
 
-// Per-color palettes: [transparent, dark, mid, light, white] sampled from
-// tetris-blocks.png. Order = colors 0..4 -> palette slots 1..5.
+// Per-color palettes sampled from tetris-blocks.png. IMPORTANT: the color order
+// MUST match how gfx4snes indexed the master tile's pixels, which is:
+//   idx0 = transparent(black outline), 1 = DARK, 2 = LIGHT, 3 = WHITE, 4 = MID.
+// (Verified from block_master.pal.) Colors 0..4 -> palette slots 1..5.
 const u16 BLOCK_PAL[5][5] = {
-    {0, RGB15(107,0,0),   RGB15(165,0,0),   RGB15(255,16,16),  RGB15(252,252,252)}, // red
-    {0, RGB15(0,107,0),   RGB15(0,180,0),   RGB15(0,255,0),    RGB15(252,252,252)}, // green
-    {0, RGB15(125,62,242),RGB15(152,96,255),RGB15(64,248,248), RGB15(252,252,252)}, // blue
-    {0, RGB15(248,120,0), RGB15(248,184,0), RGB15(248,248,0),  RGB15(252,252,252)}, // yellow
-    {0, RGB15(248,0,144), RGB15(248,24,96), RGB15(248,128,184),RGB15(252,252,252)}, // pink
+    //  0(transp)  1=dark             2=light             3=white              4=mid
+    {0, RGB15(107,0,0),    RGB15(255,16,16),   RGB15(252,252,252), RGB15(165,0,0)   }, // red
+    {0, RGB15(0,107,0),    RGB15(0,255,0),     RGB15(252,252,252), RGB15(0,180,0)   }, // green
+    {0, RGB15(125,62,242), RGB15(64,248,248),  RGB15(252,252,252), RGB15(152,96,255)}, // blue
+    {0, RGB15(248,120,0),  RGB15(248,248,0),   RGB15(252,252,252), RGB15(248,184,0) }, // yellow
+    {0, RGB15(248,0,144),  RGB15(248,128,184), RGB15(252,252,252), RGB15(248,24,96) }, // pink
 };
 
 u16 bg1map[32 * 32];  // RAM copy of BG1 tilemap; DMA'd to VRAM on change
@@ -371,12 +374,18 @@ void formatNum(u16 n, char *buf, u8 digits)
     while (digits > 0) { digits--; buf[digits] = '0' + (n % 10); n /= 10; }
 }
 
-// Palette slot (1..5) for a stored field value or an active cellColor value.
-u8 paletteOf(u8 v)
+// Palette slot (1..5) for a *stored field value* (color+1, i.e. 1..5, or WILD).
+u8 slotForField(u8 v)
 {
-    if (v == WILD || v == BOMB) return 5; // TODO 5c: distinct wild/bomb art
-    if (v == 0) return 1;
-    return (v <= 5) ? v : 5;
+    if (v == WILD) return 5; // TODO 5c: distinct wild art
+    return (v >= 1 && v <= 5) ? v : 5;
+}
+
+// Palette slot (1..5) for an *active cellColor* (raw color 0..4, or WILD/BOMB).
+u8 slotForColor(u8 cc)
+{
+    if (cc == WILD || cc == BOMB) return 5; // TODO 5c: distinct wild/bomb art
+    return (cc <= 4) ? (cc + 1) : 5;
 }
 
 // One SNES tilemap entry for a block sub-tile (tileNo relative to block tiles).
@@ -390,10 +399,13 @@ void gfxInit(void)
     bgSetGfxPtr(1, BG1_CHR);
     bgSetMapPtr(1, BG1_MAP, SC_32x32);
 
-    // Load the 5 block palettes into CGRAM palette slots 1..5.
+    // Load the 5 block palettes into CGRAM palette slots 1..5. NOTE:
+    // setPaletteColor is a multi-statement macro -- braces are REQUIRED here.
     for (c = 0; c < 5; c++)
         for (k = 0; k < 5; k++)
+        {
             setPaletteColor((c + 1) * 16 + k, BLOCK_PAL[c][k]);
+        }
 }
 
 void drawStatic(void)
@@ -425,7 +437,7 @@ void renderBlocks(void)
     for (x = 0; x < GRID_W; x++)
         for (y = 0; y < GRID_H; y++)
             if (field[x][y] != EMPTY)
-                putBlock(x, y, paletteOf(field[x][y]));
+                putBlock(x, y, slotForField(field[x][y]));
 
     if (hasActive && !gameOver)
         for (i = 0; i < cellCount; i++)
@@ -434,7 +446,7 @@ void renderBlocks(void)
             int cy = pieceY + curY[i];
             if (cx >= 0 && cx < GRID_W && cy >= 0 && cy < GRID_H &&
                 field[cx][cy] == EMPTY)
-                putBlock((u8)cx, (u8)cy, paletteOf(cellColor[i]));
+                putBlock((u8)cx, (u8)cy, slotForColor(cellColor[i]));
         }
 }
 
