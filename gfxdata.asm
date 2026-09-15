@@ -17,6 +17,16 @@ bombpal:
 .incbin "gfx/bomb.pal"
 bombpal_end:
 
+; Placement reticle: 16x16 dashed outline OBJ sprite (from ghost-blocks.png),
+; laid out for a 16x16 hardware sprite (tiles 0,1,16,17).
+reticletiles:
+.incbin "gfx/reticle.pic"
+reticletiles_end:
+
+reticlepal:
+.incbin "gfx/reticle.pal"
+reticlepal_end:
+
 ; Pixel-accurate background SCENE (16-color, 4bpp): real checker (tetris-game-bg)
 ; + play-area grid (play-area.png, with top/left shadow) + 5px blue/white/cyan
 ; frame (play-area-frame.png). 23 reduced tiles + full 32x28 tilemap.

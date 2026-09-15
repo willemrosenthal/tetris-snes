@@ -88,6 +88,16 @@ extern char scenemap, scenemap_end;
 extern char scenepal, scenepal_end;
 extern char font2tiles, font2tiles_end;
 extern char font2pal, font2pal_end;
+extern char reticletiles, reticletiles_end;
+extern char reticlepal, reticlepal_end;
+
+// Placement reticle sprites (OBJ): one 16x16 sprite per active-piece cell,
+// overlaying the piece so it's clearly "being placed" vs settled blocks.
+#define OBJ_CHR 0x4000   // OBJ tile VRAM (free 0x3700..0x5000, 0x2000-aligned)
+#define OBJ_PAL 0        // OBJ palette 0 (CGRAM 128-143)
+// Play-area top-left pixel; cell (cx,cy) -> screen (PF_PX+cx*16, PF_PY+cy*16).
+#define PF_PX (PF_TX * 8)
+#define PF_PY (PF_TY * 8)
 
 #define BLK_CHR 0x0000   // bg0 block tiles (tile 0 = blank)
 #define BLK_MAP 0x5000   // bg0 block tilemap
@@ -480,6 +490,33 @@ void gfxInit(void)
     // color so the checker's light squares read correctly.
     setPaletteColor(0, RGB15(125, 111, 201));
     setPaletteColor(1, RGB15(248, 248, 248)); // HUD font text = white (palette 0 idx1)
+
+    // --- OBJ: placement reticle sprite (16x16) ---
+    oamInit();
+    oamInitGfxSet((u8 *)&reticletiles, (u16)(&reticletiles_end - &reticletiles),
+                  (u8 *)&reticlepal, (u16)(&reticlepal_end - &reticlepal),
+                  OBJ_PAL, OBJ_CHR, OBJ_SIZE16_L32);
+    oamClear(0, 0); // hide all sprites initially
+}
+
+// Show one 16x16 reticle sprite over each active-piece cell (hide the rest).
+// Not shown for the bomb (its own art) or when there's no active piece.
+void renderReticle(void)
+{
+    u8 i;
+    if (!hasActive || gameOver || pieceIsBomb)
+    {
+        for (i = 0; i < 4; i++) oamSetVisible(i * 4, OBJ_HIDE);
+        return;
+    }
+    for (i = 0; i < cellCount; i++)
+    {
+        int cx = pieceX + curX[i];
+        int cy = pieceY + curY[i];
+        oamSet(i * 4, PF_PX + cx * 16, PF_PY + cy * 16, 2, 0, 0, 0, OBJ_PAL);
+        oamSetEx(i * 4, OBJ_SMALL, OBJ_SHOW);
+    }
+    for (i = cellCount; i < 4; i++) oamSetVisible(i * 4, OBJ_HIDE);
 }
 
 void drawStatic(void)
@@ -592,6 +629,7 @@ int main(void)
     startGame();
     drawStatic();
     drawGrid();
+    renderReticle();
     dmaCopyVram((u8 *)bg1map, BLK_MAP, sizeof(bg1map));
     setScreenOn();
 
@@ -658,6 +696,7 @@ int main(void)
         if (dirty)
         {
             drawGrid();
+            renderReticle();
             WaitForVBlank();
             dmaCopyVram((u8 *)bg1map, BLK_MAP, sizeof(bg1map));
             dirty = 0;
