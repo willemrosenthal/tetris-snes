@@ -1,0 +1,48 @@
+# Phase 4a: real multi-color pieces, no self-clear
+wait 40
+shot q1_first
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press a 12
+wait 12
+shot q2_p1
+press left 10
+press left 10
+press left 10
+press left 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press a 12
+wait 12
+shot q3_p2
+press right 10
+press right 10
+press right 10
+press right 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press a 12
+wait 12
+shot q4_p3
+stop

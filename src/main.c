@@ -1,58 +1,70 @@
 /*---------------------------------------------------------------------------------
     Pompom Tetris minigame -> SNES port
 
-    Phase 2: grid data model + one controllable piece.
-      - D-pad moves the active piece around the 9x12 grid (kept in-bounds).
-      - L / Y rotate CCW, R / X rotate CW (matches TetrisGamepadControls).
-      - A places the piece on empty cells; overlaps are rejected.
-    Phase 3: match detection + clearing + scoring (ports GetLinkedBlocks +
-      TetrisBlockBreaker). On placement, any horizontal or vertical run of >=3
-      same-color blocks clears. Score: 50 per block, +100 per block beyond 3 in
-      one clear event. (Wild/bomb + real multi-color pieces come in Phase 4.)
-      Placeholder piece is a single-color 2x2 square: it never self-clears (no
-      run of 3 within it), so placement is visible and you build matches across
-      pieces. Rotation has no visible effect on a square (it was verified on the
-      L in Phase 2).
-    Rendering still uses the text console (tile/sprite art comes in Phase 5):
-      placed blocks = lowercase color letters, active piece = uppercase,
-      '*' marks a cell where the active piece overlaps a placed block.
+    Phase 2: grid + one controllable piece (d-pad move, L/Y+R/X rotate, A place).
+    Phase 3: match detection + clearing + scoring.
+    Phase 4a: real pieces -- the 10 shapes extracted from the Unity prefabs, each
+      generated multi-color (2 of 5 colors per piece, per-cell). Replaces the
+      placeholder square.
+    Phase 4b: no self-clear -- a run of >=3 only clears if it connects the newly
+      placed piece to same-color block(s) already on the board (creator's rule).
+      A run wholly inside the piece just placed does NOT clear.
+
+    Still text-console rendering (tile/sprite art = Phase 5): placed blocks =
+    lowercase color letters, active piece = uppercase, '*' = active-over-placed.
+    Wild/bomb + marble queue + spawn timer + game over come in 4c/4d.
 ---------------------------------------------------------------------------------*/
 #include <snes.h>
 
 #define GRID_W 9
 #define GRID_H 12
-#define GRID_X 11 /* console column of the grid interior's left edge  */
-#define GRID_Y 8  /* console row of the grid interior's top edge      */
+#define GRID_X 11
+#define GRID_Y 8
 #define EMPTY 0
-#define NUM_COLORS 7
+#define MAX_CELLS 4
+#define GEN_COLORS 5 /* prefab totalColors: pieces use colors 0..4 */
 
 // field[x][y]: 0 = empty, otherwise (color index + 1)
 u8 field[GRID_W][GRID_H];
+// marks the cells of the piece placed this turn (for the no-self-clear rule)
+u8 justPlaced[GRID_W][GRID_H];
 
-// Color glyphs: placed (lowercase) vs active piece (uppercase)
-const char PLACED_CH[NUM_COLORS] = {'r', 'g', 'b', 'y', 'p', 'c', 'o'};
-const char ACTIVE_CH[NUM_COLORS] = {'R', 'G', 'B', 'Y', 'P', 'C', 'O'};
+// Color glyphs (7 defined; generation uses the first GEN_COLORS)
+const char PLACED_CH[7] = {'r', 'g', 'b', 'y', 'p', 'c', 'o'};
+const char ACTIVE_CH[7] = {'R', 'G', 'B', 'Y', 'P', 'C', 'O'};
 
-// Base shape: a 2x2 square (O). No run of 3 within it, so it never self-clears
-// -- placement stays visible and matches are built across pieces. Phase 4
-// replaces this with real (multi-color) piece data extracted from the prefabs.
-const s8 BASE_X[4] = {0, 1, 0, 1};
-const s8 BASE_Y[4] = {0, 0, 1, 1};
+// Piece shapes (offsets), extracted from Assets/.../tetris/Game Objects/Block*.prefab
+typedef struct { u8 n; s8 x[MAX_CELLS]; s8 y[MAX_CELLS]; } Shape;
+const Shape SHAPES[] = {
+    {1, {0},       {0}      }, // Single
+    {2, {0, 0},    {0, 1}   }, // Double (domino)
+    {3, {0, 0, 1}, {0, 1, 1}}, // Corner (L-tromino)
+    {4, {0, 0, 0, 0}, {0, 1, 2, 3}}, // Vert (I, 4 tall)
+    {4, {0, 0, 1, 1}, {0, 1, 0, 1}}, // Square (O)
+    {4, {0, 1, 1, 2}, {1, 0, 1, 1}}, // T
+    {4, {0, 1, 1, 1}, {0, 0, 1, 2}}, // L
+    {4, {0, 0, 0, 1}, {0, 1, 2, 0}}, // Lx (J)
+    {4, {0, 1, 1, 2}, {1, 0, 1, 0}}, // Z
+    {4, {0, 1, 1, 2}, {0, 0, 1, 1}}, // Zx
+};
+#define NUM_SHAPES (sizeof(SHAPES) / sizeof(SHAPES[0]))
 
 // Active piece state
-s8 curX[4], curY[4]; // current (possibly rotated) offsets
-int pieceX, pieceY;  // anchor cell on the grid
-u8 pieceColor;       // 0..NUM_COLORS-1
+u8 cellCount;
+s8 curX[MAX_CELLS], curY[MAX_CELLS]; // current (rotated) offsets
+u8 cellColor[MAX_CELLS];             // per-cell color 0..GEN_COLORS-1
+int pieceX, pieceY;                  // anchor cell
 
-u8 dirty;    // redraw grid interior when set
-u16 score;   // player score
+u8 dirty;
+u16 score;
 
 //---------------------------------------------------------------------------------
-// True if every piece cell (anchor + offsets) sits inside the grid.
+u8 randn(u8 n) { return (u8)(rand() % n); }
+
 u8 cellsInBounds(int ax, int ay, s8 *ox, s8 *oy)
 {
     u8 i;
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < cellCount; i++)
     {
         int cx = ax + ox[i];
         int cy = ay + oy[i];
@@ -62,39 +74,50 @@ u8 cellsInBounds(int ax, int ay, s8 *ox, s8 *oy)
     return 1;
 }
 
-// True if every piece cell is on an empty grid square.
 u8 canPlace(void)
 {
     u8 i;
-    for (i = 0; i < 4; i++)
-    {
-        int cx = pieceX + curX[i];
-        int cy = pieceY + curY[i];
-        if (field[cx][cy] != EMPTY)
+    for (i = 0; i < cellCount; i++)
+        if (field[pieceX + curX[i]][pieceY + curY[i]] != EMPTY)
             return 0;
-    }
     return 1;
 }
 
-// SNES crt0 does not zero-initialize globals, so clear the field explicitly.
-void clearField(void)
+// SNES crt0 does not zero-initialize globals, so clear these explicitly.
+void clearBoard(void)
 {
     u8 x, y;
     for (x = 0; x < GRID_W; x++)
         for (y = 0; y < GRID_H; y++)
+        {
             field[x][y] = EMPTY;
+            justPlaced[x][y] = 0;
+        }
 }
 
-void resetPiece(void)
+// Generate a new random piece (random shape, 2 random colors) at top-center.
+void spawnPiece(void)
 {
-    u8 i;
-    for (i = 0; i < 4; i++)
+    u8 i, s, c0, c1;
+    s8 maxx = 0;
+
+    s = randn(NUM_SHAPES);
+    cellCount = SHAPES[s].n;
+    for (i = 0; i < cellCount; i++)
     {
-        curX[i] = BASE_X[i];
-        curY[i] = BASE_Y[i];
+        curX[i] = SHAPES[s].x[i];
+        curY[i] = SHAPES[s].y[i];
+        if (curX[i] > maxx) maxx = curX[i];
     }
-    pieceX = 4;
-    pieceY = 1;
+
+    // Pick 2 colors; each cell is one of the two (per TetrisBlockGroup.ChooseBricks)
+    c0 = randn(GEN_COLORS);
+    c1 = randn(GEN_COLORS);
+    for (i = 0; i < cellCount; i++)
+        cellColor[i] = (rand() & 1) ? c1 : c0;
+
+    pieceX = (GRID_W - 1 - maxx) / 2;
+    pieceY = 0;
     dirty = 1;
 }
 
@@ -108,32 +131,21 @@ void tryMove(int dx, int dy)
     }
 }
 
-// dir > 0 = clockwise, dir < 0 = counter-clockwise. Includes a simple wall kick
-// (shift the anchor back in-bounds after rotating), mirroring the Unity version.
+// dir > 0 = clockwise, dir < 0 = counter-clockwise, with a simple wall kick.
 void tryRotate(int dir)
 {
-    s8 rx[4], ry[4];
+    s8 rx[MAX_CELLS], ry[MAX_CELLS];
     int minx = 127, maxx = -128, miny = 127, maxy = -128;
     int shiftX = 0, shiftY = 0;
     u8 i;
 
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < cellCount; i++)
     {
-        if (dir > 0)
-        {
-            rx[i] = curY[i];
-            ry[i] = -curX[i];
-        }
-        else
-        {
-            rx[i] = -curY[i];
-            ry[i] = curX[i];
-        }
+        if (dir > 0) { rx[i] = curY[i];  ry[i] = -curX[i]; }
+        else         { rx[i] = -curY[i]; ry[i] = curX[i];  }
     }
 
-    // Where would the rotated cells land? Compute the shift needed to pull them
-    // fully back inside the grid.
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < cellCount; i++)
     {
         int cx = pieceX + rx[i];
         int cy = pieceY + ry[i];
@@ -148,34 +160,27 @@ void tryRotate(int dir)
     else if (maxy > GRID_H - 1) shiftY = (GRID_H - 1) - maxy;
 
     if (!cellsInBounds(pieceX + shiftX, pieceY + shiftY, rx, ry))
-        return; // shouldn't happen for a 4-cell piece, but bail rather than glitch
+        return;
 
-    for (i = 0; i < 4; i++)
-    {
-        curX[i] = rx[i];
-        curY[i] = ry[i];
-    }
+    for (i = 0; i < cellCount; i++) { curX[i] = rx[i]; curY[i] = ry[i]; }
     pieceX += shiftX;
     pieceY += shiftY;
     dirty = 1;
 }
 
-// Clear any horizontal or vertical run of >=3 same-color blocks, and score it.
-// The board never holds a >=3 run at rest (they always clear on the placement
-// that forms them), so a full-board scan finds exactly the runs this placement
-// created -- equivalent to the Unity flood from the placed block, but simpler.
+// Clear horizontal/vertical runs of >=3 same color, but only runs that include
+// at least one block NOT just placed (so a piece can't clear against itself).
 void resolveMatches(void)
 {
     u8 clear[GRID_W][GRID_H];
-    u8 x, y, run, c, i;
+    u8 x, y, run, c, i, hasOld;
     u16 n = 0;
 
     for (x = 0; x < GRID_W; x++)
         for (y = 0; y < GRID_H; y++)
             clear[x][y] = 0;
 
-    // Horizontal runs
-    for (y = 0; y < GRID_H; y++)
+    for (y = 0; y < GRID_H; y++)     // horizontal
     {
         x = 0;
         while (x < GRID_W)
@@ -185,12 +190,15 @@ void resolveMatches(void)
             run = 1;
             while (x + run < GRID_W && field[x + run][y] == c) run++;
             if (run >= 3)
-                for (i = 0; i < run; i++) clear[x + i][y] = 1;
+            {
+                hasOld = 0;
+                for (i = 0; i < run; i++) if (!justPlaced[x + i][y]) { hasOld = 1; break; }
+                if (hasOld) for (i = 0; i < run; i++) clear[x + i][y] = 1;
+            }
             x += run;
         }
     }
-    // Vertical runs
-    for (x = 0; x < GRID_W; x++)
+    for (x = 0; x < GRID_W; x++)     // vertical
     {
         y = 0;
         while (y < GRID_H)
@@ -200,7 +208,11 @@ void resolveMatches(void)
             run = 1;
             while (y + run < GRID_H && field[x][y + run] == c) run++;
             if (run >= 3)
-                for (i = 0; i < run; i++) clear[x][y + i] = 1;
+            {
+                hasOld = 0;
+                for (i = 0; i < run; i++) if (!justPlaced[x][y + i]) { hasOld = 1; break; }
+                if (hasOld) for (i = 0; i < run; i++) clear[x][y + i] = 1;
+            }
             y += run;
         }
     }
@@ -211,8 +223,8 @@ void resolveMatches(void)
 
     if (n > 0)
     {
-        score += n * 50;              // 50 per block (TetrisBlock.Break)
-        if (n > 3) score += (n - 3) * 100; // combo bonus (TetrisBlockBreaker)
+        score += n * 50;
+        if (n > 3) score += (n - 3) * 100;
         dirty = 1;
     }
 }
@@ -222,27 +234,27 @@ void placePiece(void)
     u8 i;
     if (!canPlace())
         return; // overlap -> rejected
-    for (i = 0; i < 4; i++)
-        field[pieceX + curX[i]][pieceY + curY[i]] = pieceColor + 1;
+
+    for (i = 0; i < cellCount; i++)
+    {
+        field[pieceX + curX[i]][pieceY + curY[i]] = cellColor[i] + 1;
+        justPlaced[pieceX + curX[i]][pieceY + curY[i]] = 1;
+    }
 
     resolveMatches();
-    // Phase 3 placeholder: keep one fixed color so same-color runs can actually
-    // be built up by hand. Phase 4 gives pieces real (multi-)colors.
-    resetPiece();
+
+    for (i = 0; i < cellCount; i++)
+        justPlaced[pieceX + curX[i]][pieceY + curY[i]] = 0;
+
+    spawnPiece();
 }
 
 //---------------------------------------------------------------------------------
-// consoleDrawText's %d is unreliable in this PVSnesLib build, so format digits
-// manually into a zero-padded string and print with %s.
+// consoleDrawText %d is unreliable here; format digits manually and print %s.
 void formatNum(u16 n, char *buf, u8 digits)
 {
     buf[digits] = 0;
-    while (digits > 0)
-    {
-        digits--;
-        buf[digits] = '0' + (n % 10);
-        n /= 10;
-    }
+    while (digits > 0) { digits--; buf[digits] = '0' + (n % 10); n /= 10; }
 }
 
 void drawStatic(void)
@@ -251,7 +263,6 @@ void drawStatic(void)
     consoleDrawText(9, 2, "POMPOM TETRIS - SNES");
     consoleDrawText(1, 5, "DPAD MOVE  L/Y R/X ROT  A PLACE");
 
-    // Grid border (never changes)
     consoleDrawText(GRID_X - 1, GRID_Y - 1, "###########");
     consoleDrawText(GRID_X - 1, GRID_Y + GRID_H, "###########");
     for (y = 0; y < GRID_H; y++)
@@ -271,13 +282,12 @@ void drawGrid(void)
         for (x = 0; x < GRID_W; x++)
             cells[x][y] = (field[x][y] != EMPTY) ? PLACED_CH[field[x][y] - 1] : '.';
 
-    // Overlay the active piece; '*' where it sits on a placed block (invalid).
-    for (i = 0; i < 4; i++)
+    for (i = 0; i < cellCount; i++)
     {
         int cx = pieceX + curX[i];
         int cy = pieceY + curY[i];
         if (cx >= 0 && cx < GRID_W && cy >= 0 && cy < GRID_H)
-            cells[cx][cy] = (field[cx][cy] != EMPTY) ? '*' : ACTIVE_CH[pieceColor];
+            cells[cx][cy] = (field[cx][cy] != EMPTY) ? '*' : ACTIVE_CH[cellColor[i]];
     }
 
     for (y = 0; y < GRID_H; y++)
@@ -288,11 +298,8 @@ void drawGrid(void)
         consoleDrawText(GRID_X, GRID_Y + y, "%s", row);
     }
 
-    // Placement status line
     consoleDrawText(GRID_X - 1, GRID_Y + GRID_H + 2,
                     canPlace() ? "PLACE: OK " : "PLACE: NO ");
-
-    // Score
     {
         char sbuf[7];
         formatNum(score, sbuf, 6);
@@ -312,22 +319,17 @@ int main(void)
     bgSetDisable(1);
     bgSetDisable(2);
 
-    clearField();
-    pieceColor = 2; // blue placeholder (fixed for Phase 3)
+    srand(0x1234); // fixed seed for now (deterministic); randomize in a later phase
+    clearBoard();
     score = 0;
-    resetPiece();
+    spawnPiece();
     drawStatic();
     setScreenOn();
 
-    // Discard spurious pad edges from the first few frames before the pad is
-    // first scanned (otherwise the piece jumps on boot).
+    // Discard spurious pad edges from the first few frames after boot.
     {
         u8 k;
-        for (k = 0; k < 4; k++)
-        {
-            WaitForVBlank();
-            (void)padsDown(0);
-        }
+        for (k = 0; k < 4; k++) { WaitForVBlank(); (void)padsDown(0); }
     }
 
     while (1)
