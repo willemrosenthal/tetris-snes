@@ -11,3 +11,10 @@
 *.log
 *.ps
 build/
+
+# auto-generated link + gfx intermediates (keep only master .pic/.png sources)
+linkfile
+gfx/*.pal
+gfx/*.map
+gfx/*.inc
+gfx/*_data.as
