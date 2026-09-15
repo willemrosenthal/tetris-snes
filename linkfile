@@ -1,5 +1,6 @@
 [objects]
 src/main.obj
+gfxdata.obj
 hdr.obj
 /Users/admin/snesdev/pvsneslib/pvsneslib/lib/LoROM_SlowROM/crt0_snes.obj
 /Users/admin/snesdev/pvsneslib/pvsneslib/lib/LoROM_SlowROM/libc.obj

@@ -75,6 +75,31 @@ u16 spawnInterval;
 u8 speedPct;      // 0..100 acceleration (marbleSpawnTimer speeds up over time)
 
 //---------------------------------------------------------------------------------
+// Phase 5a graphics: real 16x16 block art on BG1 (bg index 1). One block shape
+// (4 tiles) recolored by 5 palettes. Console text HUD stays on bg 0.
+extern char blocktiles, blocktiles_end;
+
+#define BG1_CHR 0x0000   // VRAM word addr of BG1 tiles (tile 0 = blank)
+#define BG1_MAP 0x5000   // VRAM word addr of BG1 tilemap (32x32)
+#define PF_TX 2          // playfield origin in 8x8 tiles (left)
+#define PF_TY 3          // playfield origin (top). 9x12 blocks = 18x24 tiles.
+
+// SNES BGR15 color from 8-bit RGB
+#define RGB15(r, g, b) (((u16)((b) >> 3) << 10) | ((u16)((g) >> 3) << 5) | ((r) >> 3))
+
+// Per-color palettes: [transparent, dark, mid, light, white] sampled from
+// tetris-blocks.png. Order = colors 0..4 -> palette slots 1..5.
+const u16 BLOCK_PAL[5][5] = {
+    {0, RGB15(107,0,0),   RGB15(165,0,0),   RGB15(255,16,16),  RGB15(252,252,252)}, // red
+    {0, RGB15(0,107,0),   RGB15(0,180,0),   RGB15(0,255,0),    RGB15(252,252,252)}, // green
+    {0, RGB15(125,62,242),RGB15(152,96,255),RGB15(64,248,248), RGB15(252,252,252)}, // blue
+    {0, RGB15(248,120,0), RGB15(248,184,0), RGB15(248,248,0),  RGB15(252,252,252)}, // yellow
+    {0, RGB15(248,0,144), RGB15(248,24,96), RGB15(248,128,184),RGB15(252,252,252)}, // pink
+};
+
+u16 bg1map[32 * 32];  // RAM copy of BG1 tilemap; DMA'd to VRAM on change
+
+//---------------------------------------------------------------------------------
 u8 randn(u8 n) { return (u8)(rand() % n); }
 
 u8 cellsInBounds(int ax, int ay, s8 *ox, s8 *oy)
@@ -346,70 +371,92 @@ void formatNum(u16 n, char *buf, u8 digits)
     while (digits > 0) { digits--; buf[digits] = '0' + (n % 10); n /= 10; }
 }
 
-void drawStatic(void)
+// Palette slot (1..5) for a stored field value or an active cellColor value.
+u8 paletteOf(u8 v)
 {
-    u8 y;
-    consoleDrawText(9, 2, "POMPOM TETRIS - SNES");
-    consoleDrawText(1, 5, "DPAD MOVE  L/Y R/X ROT  A PLACE");
-
-    consoleDrawText(GRID_X - 1, GRID_Y - 1, "###########");
-    consoleDrawText(GRID_X - 1, GRID_Y + GRID_H, "###########");
-    for (y = 0; y < GRID_H; y++)
-    {
-        consoleDrawText(GRID_X - 1, GRID_Y + y, "#");
-        consoleDrawText(GRID_X + GRID_W, GRID_Y + y, "#");
-    }
+    if (v == WILD || v == BOMB) return 5; // TODO 5c: distinct wild/bomb art
+    if (v == 0) return 1;
+    return (v <= 5) ? v : 5;
 }
 
-void drawGrid(void)
-{
-    char cells[GRID_W][GRID_H];
-    char row[GRID_W + 1];
-    u8 x, y, i;
+// One SNES tilemap entry for a block sub-tile (tileNo relative to block tiles).
+#define BLOCK_ENTRY(subtile, slot) ((u16)((subtile) + 1) | ((u16)(slot) << 10))
 
-    for (y = 0; y < GRID_H; y++)
-        for (x = 0; x < GRID_W; x++)
-        {
-            u8 v = field[x][y];
-            cells[x][y] = (v == EMPTY) ? '.' : (v == WILD) ? '?' : PLACED_CH[v - 1];
-        }
+void gfxInit(void)
+{
+    u8 c, k;
+    // Load the 4 block tiles at VRAM tile #1 (tile 0 stays blank/transparent).
+    dmaCopyVram((u8 *)&blocktiles, BG1_CHR + 16, (u16)(&blocktiles_end - &blocktiles));
+    bgSetGfxPtr(1, BG1_CHR);
+    bgSetMapPtr(1, BG1_MAP, SC_32x32);
+
+    // Load the 5 block palettes into CGRAM palette slots 1..5.
+    for (c = 0; c < 5; c++)
+        for (k = 0; k < 5; k++)
+            setPaletteColor((c + 1) * 16 + k, BLOCK_PAL[c][k]);
+}
+
+void drawStatic(void)
+{
+    consoleDrawText(10, 0, "POMPOM TETRIS");
+    consoleDrawText(0, 27, "DPAD MOVE  L/Y R/X ROT  A PLACE");
+}
+
+// Place a 16x16 block (2x2 tiles) into the bg1 map buffer at grid cell (gx,gy).
+void putBlock(u8 gx, u8 gy, u8 slot)
+{
+    u16 tx = PF_TX + gx * 2;
+    u16 ty = PF_TY + gy * 2;
+    u16 base = ty * 32 + tx;
+    bg1map[base]          = BLOCK_ENTRY(0, slot); // TL
+    bg1map[base + 1]      = BLOCK_ENTRY(1, slot); // TR
+    bg1map[base + 32]     = BLOCK_ENTRY(2, slot); // BL
+    bg1map[base + 33]     = BLOCK_ENTRY(3, slot); // BR
+}
+
+// Rebuild the BG1 tilemap from the field + active piece (blocks are graphics).
+void renderBlocks(void)
+{
+    u16 i;
+    u8 x, y;
+
+    for (i = 0; i < 32 * 32; i++) bg1map[i] = 0; // clear (tile 0 = blank)
+
+    for (x = 0; x < GRID_W; x++)
+        for (y = 0; y < GRID_H; y++)
+            if (field[x][y] != EMPTY)
+                putBlock(x, y, paletteOf(field[x][y]));
 
     if (hasActive && !gameOver)
         for (i = 0; i < cellCount; i++)
         {
             int cx = pieceX + curX[i];
             int cy = pieceY + curY[i];
-            char g = (cellColor[i] == BOMB) ? '@'
-                   : (cellColor[i] == WILD) ? 'W'
-                   : ACTIVE_CH[cellColor[i]];
-            if (cx >= 0 && cx < GRID_W && cy >= 0 && cy < GRID_H)
-                cells[cx][cy] = (field[cx][cy] != EMPTY) ? '*' : g;
+            if (cx >= 0 && cx < GRID_W && cy >= 0 && cy < GRID_H &&
+                field[cx][cy] == EMPTY)
+                putBlock((u8)cx, (u8)cy, paletteOf(cellColor[i]));
         }
+}
 
-    for (y = 0; y < GRID_H; y++)
-    {
-        for (x = 0; x < GRID_W; x++)
-            row[x] = cells[x][y];
-        row[GRID_W] = 0;
-        consoleDrawText(GRID_X, GRID_Y + y, "%s", row);
-    }
+// HUD text (console, bg 0) to the right of the playfield.
+void drawHud(void)
+{
+    char sbuf[7], tbuf[2];
+    formatNum(score, sbuf, 6);
+    consoleDrawText(22, 4, "SCORE");
+    consoleDrawText(22, 5, sbuf);
+    tbuf[0] = '0' + queue;
+    tbuf[1] = 0;
+    consoleDrawText(22, 8, "TUBE %s/5", tbuf);
+    consoleDrawText(22, 10, canPlace() ? "PLACE OK" : "PLACE NO");
+    consoleDrawText(22, 13, gameOver ? "GAME OVER" : "         ");
+    consoleDrawText(22, 14, gameOver ? "-START-  " : "         ");
+}
 
-    {
-        char sbuf[7];
-        formatNum(score, sbuf, 6);
-        consoleDrawText(1, 3, "SCORE %s", sbuf);
-    }
-    // Tube fill (marbles waiting) -- fills toward TUBE_MAX = game over
-    {
-        char tbuf[2];
-        tbuf[0] = '0' + queue;
-        tbuf[1] = 0;
-        consoleDrawText(GRID_X - 1, GRID_Y + GRID_H + 2, "TUBE %s/5", tbuf);
-    }
-    if (gameOver)
-        consoleDrawText(GRID_X - 2, GRID_Y + GRID_H + 3, "GAME OVER-START");
-    else
-        consoleDrawText(GRID_X - 2, GRID_Y + GRID_H + 3, "               ");
+void drawGrid(void)
+{
+    renderBlocks();
+    drawHud();
 }
 
 //---------------------------------------------------------------------------------
@@ -420,13 +467,15 @@ int main(void)
     consoleInitDefaultText(0);
     bgSetGfxPtr(0, 0x3000);
     bgSetMapPtr(0, 0x6800, SC_32x32);
+    gfxInit();          // BG1 block tiles + palettes
     setMode(BG_MODE1, 0);
-    bgSetDisable(1);
-    bgSetDisable(2);
+    bgSetDisable(2);    // keep BG0 (text) + BG1 (blocks); disable BG2
 
     srand(0x1234); // fixed seed for now (deterministic); randomize in a later phase
     startGame();
     drawStatic();
+    drawGrid();
+    dmaCopyVram((u8 *)bg1map, BG1_MAP, sizeof(bg1map));
     setScreenOn();
 
     // Discard spurious pad edges from the first few frames after boot.
@@ -478,10 +527,14 @@ int main(void)
         if (dirty)
         {
             drawGrid();
+            WaitForVBlank();
+            dmaCopyVram((u8 *)bg1map, BG1_MAP, sizeof(bg1map));
             dirty = 0;
         }
-
-        WaitForVBlank();
+        else
+        {
+            WaitForVBlank();
+        }
     }
     return 0;
 }

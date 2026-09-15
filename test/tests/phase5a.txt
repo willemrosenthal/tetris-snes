@@ -1,0 +1,54 @@
+# 5a: real block graphics
+wait 40
+shot g1_start
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press a 12
+wait 12
+press left 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press a 12
+wait 12
+press left 10
+press left 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press a 12
+wait 12
+press right 10
+press right 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press down 10
+press a 12
+wait 12
+shot g2_blocks
+stop

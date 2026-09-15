@@ -7,9 +7,15 @@ export ROMTITLE := POMPOM TETRIS
 
 include ${PVSNESLIB_HOME}/devkitsnes/snes_rules
 
-.PHONY: all cleanLogs
+.PHONY: all cleanLogs bitmaps
 
-all: buildWithSummary
+# Block art is pre-converted and committed (gfx/block_master.pic). To regenerate
+# from the source PNG, run `make gfx`.
+gfx:
+	cd gfx && $(GFXCONV) -i block_master.png -s 8 -u 16 -p -m -t png
+
+all: bitmaps buildWithSummary
+bitmaps: gfx/block_master.pic
 buildActual: $(OBJS) $(ROMNAME).sfc
 
 clean: cleanBuildRes cleanRom cleanGfx cleanLogs
