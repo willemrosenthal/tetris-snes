@@ -25,7 +25,7 @@
 #define GEN_COLORS 5 /* prefab totalColors: pieces use colors 0..4 */
 #define WILD 99      /* field value / cellColor marker: matches any color */
 #define BOMB 98      /* cellColor marker for an active bomb piece */
-#define WILD_CHANCE 5   /* percent, per cell (prefab wildChance 0.05) */
+#define WILD_CHANCE 5  /* percent, per cell (prefab wildChance 0.05) */
 #define BOMB_CHANCE 10 /* percent, per piece */
 
 // field[x][y]: 0 = empty, otherwise (color index + 1)
@@ -132,10 +132,11 @@ const u16 BLOCK_PAL[5][6] = {
 
 u16 bg1map[32 * 32];  // RAM copy of BG1 tilemap; DMA'd to VRAM on change
 
-// Bomb: 12 tiles loaded after the 4 block tiles -> VRAM tiles 5..16.
-// Frame f (0..2) top-left tile = BOMB_T0 + f*4.
-#define BOMB_T0 5
-#define BOMB_PAL 7           // bomb uses BG palette 7 (CGRAM 112-127)
+// Bomb is now a hardware sprite (OBJ), freeing BG palette 7 for wild's yellow.
+// OBJ tiles loaded at OBJ tile 32 (after the reticle's 0..31); frame f sprite
+// gfxoffset = BOMB_OBJ_T0 + f*2. Uses OBJ palette 2.
+#define BOMB_OBJ_T0 32
+#define BOMB_OBJ_PAL 2
 
 // Animation timing from the Unity clips (60fps == our frame rate). Per-frame
 // hold times VARY, so we drive each from a per-frame lookup indexed by a clock.
@@ -143,10 +144,10 @@ u16 bg1map[32 * 32];  // RAM copy of BG1 tilemap; DMA'd to VRAM on change
 #define BOMB_LEN 11
 const u8 BOMB_SEQ[BOMB_LEN] = {0,0,0,0, 1,1,1,1, 2,2,2};
 // Wild: flash as fast as possible -- 1 frame per color (per creator's request).
-// Order yellow,pink,purple,blue,green mapped to our palette slots (game colors
-// green1,blue2,pink3,purple4,orange5); orange(5) stands in for the clip's yellow.
+// Exact clip order yellow,pink,purple,blue,green -> slots 7,3,4,2,1 (slot 7 =
+// yellow, freed by moving the bomb to a sprite).
 #define WILD_LEN 5
-const u8 WILD_SEQ[WILD_LEN] = {5, 3, 4, 2, 1}; // slot per frame (1 frame each)
+const u8 WILD_SEQ[WILD_LEN] = {7, 3, 4, 2, 1}; // slot per frame (1 frame each)
 
 // Animation state (advanced each frame in the main loop).
 u16 animClock;
@@ -467,9 +468,8 @@ void gfxInit(void)
     u8 c, k;
 
     // --- bg0: blocks (16-color, front-most BG) ---
-    // Block tiles at VRAM tile #1 (tile 0 stays blank); bomb tiles follow (5..16).
+    // Block tiles at VRAM tile #1 (tile 0 stays blank). Bomb is a sprite now.
     dmaCopyVram((u8 *)&blocktiles, BLK_CHR + 16, (u16)(&blocktiles_end - &blocktiles));
-    dmaCopyVram((u8 *)&bombtiles, BLK_CHR + BOMB_T0 * 16, (u16)(&bombtiles_end - &bombtiles));
     bgSetGfxPtr(0, BLK_CHR);
     bgSetMapPtr(0, BLK_MAP, SC_32x32);
     // 5 block palettes -> slots 1..5. (setPaletteColor is multi-statement: braces!)
@@ -478,8 +478,11 @@ void gfxInit(void)
         {
             setPaletteColor((c + 1) * 16 + k, BLOCK_PAL[c][k]);
         }
-    // Bomb palette -> slot 7 (16 colors).
-    setPalette((u8 *)&bombpal, BOMB_PAL * 16, 16 * 2);
+    // Slot 7 = yellow (the bomb no longer needs a BG palette) so wild is exact.
+    {
+        const u16 YEL[6] = {0, BLK, RGB15(248,120,0), RGB15(248,248,0), WHT, RGB15(248,184,0)};
+        for (k = 0; k < 6; k++) { setPaletteColor(7 * 16 + k, YEL[k]); }
+    }
 
     // --- bg1: pixel-accurate background scene (16-color, behind blocks) ---
     dmaCopyVram((u8 *)&scenetiles, SCN_CHR, (u16)(&scenetiles_end - &scenetiles));
@@ -501,21 +504,29 @@ void gfxInit(void)
     // reticle tiles use idx1 (white) + idx2 (black); recolor idx1 to red.
     setPaletteColor(128 + OBJ_PAL_RED * 16 + 1, RGB15(248, 24, 24)); // red
     setPaletteColor(128 + OBJ_PAL_RED * 16 + 2, RGB15(80, 0, 0));    // dark red
+
+    // Bomb OBJ tiles at OBJ tile 32 (after the reticle's 32-tile block) + palette 2.
+    dmaCopyVram((u8 *)&bombtiles, OBJ_CHR + BOMB_OBJ_T0 * 16,
+                (u16)(&bombtiles_end - &bombtiles));
+    setPalette((u8 *)&bombpal, 128 + BOMB_OBJ_PAL * 16, 16 * 2);
+
     oamClear(0, 0); // hide all sprites initially
 }
 
 // Show one 16x16 reticle sprite over each active-piece cell (hide the rest).
 // Not shown for the bomb (its own art) or when there's no active piece.
+// Sprite id 8 (OAM byte 32) = the bomb sprite. Reticles use ids 0..3.
+#define BOMB_OAM 32
+
 void renderReticle(void)
 {
     u8 i;
-    if (!hasActive || gameOver || pieceIsBomb)
+    u8 activePiece = hasActive && !gameOver && !pieceIsBomb;
+
+    // Reticles (one per active non-bomb cell), red when placement is invalid.
+    if (activePiece)
     {
-        for (i = 0; i < 4; i++) oamSetVisible(i * 4, OBJ_HIDE);
-        return;
-    }
-    {
-        u8 pal = canPlace() ? OBJ_PAL : OBJ_PAL_RED; // red when overlapping
+        u8 pal = canPlace() ? OBJ_PAL : OBJ_PAL_RED;
         for (i = 0; i < cellCount; i++)
         {
             int cx = pieceX + curX[i];
@@ -523,8 +534,22 @@ void renderReticle(void)
             oamSet(i * 4, PF_PX + cx * 16, PF_PY + cy * 16, 2, 0, 0, 0, pal);
             oamSetEx(i * 4, OBJ_SMALL, OBJ_SHOW);
         }
+        for (i = cellCount; i < 4; i++) oamSetVisible(i * 4, OBJ_HIDE);
     }
-    for (i = cellCount; i < 4; i++) oamSetVisible(i * 4, OBJ_HIDE);
+    else
+        for (i = 0; i < 4; i++) oamSetVisible(i * 4, OBJ_HIDE);
+
+    // Bomb sprite (animated), drawn only while a bomb piece is in play.
+    if (hasActive && !gameOver && pieceIsBomb)
+    {
+        int cx = pieceX + curX[0];
+        int cy = pieceY + curY[0];
+        oamSet(BOMB_OAM, PF_PX + cx * 16, PF_PY + cy * 16, 2, 0, 0,
+               BOMB_OBJ_T0 + bombFrame * 2, BOMB_OBJ_PAL);
+        oamSetEx(BOMB_OAM, OBJ_SMALL, OBJ_SHOW);
+    }
+    else
+        oamSetVisible(BOMB_OAM, OBJ_HIDE);
 }
 
 void drawStatic(void)
@@ -545,18 +570,6 @@ void putBlock(u8 gx, u8 gy, u8 slot)
     bg1map[base + 33]     = BLOCK_ENTRY(3, slot); // BR
 }
 
-// Place the animated bomb (current frame's 4 tiles) at grid cell (gx,gy).
-void putBomb(u8 gx, u8 gy)
-{
-    u16 tx = PF_TX + gx * 2;
-    u16 ty = PF_TY + gy * 2;
-    u16 base = ty * 32 + tx;
-    u16 t = BOMB_T0 + bombFrame * 4;
-    bg1map[base]      = t       | (BOMB_PAL << 10); // TL
-    bg1map[base + 1]  = (t + 1) | (BOMB_PAL << 10); // TR
-    bg1map[base + 32] = (t + 2) | (BOMB_PAL << 10); // BL
-    bg1map[base + 33] = (t + 3) | (BOMB_PAL << 10); // BR
-}
 
 // Rebuild the BG1 tilemap from the field + active piece (blocks are graphics).
 void renderBlocks(void)
@@ -571,16 +584,9 @@ void renderBlocks(void)
             if (field[x][y] != EMPTY)
                 putBlock(x, y, slotForField(field[x][y]));
 
-    if (hasActive && !gameOver)
+    // The bomb is drawn as a sprite (see renderReticle), not on the BG.
+    if (hasActive && !gameOver && !pieceIsBomb)
     {
-        if (pieceIsBomb)
-        {
-            int cx = pieceX + curX[0];
-            int cy = pieceY + curY[0];
-            if (cx >= 0 && cx < GRID_W && cy >= 0 && cy < GRID_H)
-                putBomb((u8)cx, (u8)cy);
-        }
-        else
             for (i = 0; i < cellCount; i++)
             {
                 int cx = pieceX + curX[i];

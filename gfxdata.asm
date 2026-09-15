@@ -8,9 +8,9 @@ blocktiles:
 .incbin "gfx/block_master.pic"
 blocktiles_end:
 
-; Bomb: 12 tiles = 3 animation frames x 4 (TL,TR,BL,BR). From tetris-blocks.png.
+; Bomb OBJ sprite: 3 frames arranged for 16x16 hardware sprites (gfxoffset f*2).
 bombtiles:
-.incbin "gfx/bomb.pic"
+.incbin "gfx/bomb_obj.pic"
 bombtiles_end:
 
 bombpal:
