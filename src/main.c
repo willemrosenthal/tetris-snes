@@ -86,16 +86,27 @@ extern char blocktiles, blocktiles_end;
 #define PF_TX 2          // playfield origin in 8x8 tiles (left)
 #define PF_TY 3          // playfield origin (top). 9x12 blocks = 18x24 tiles.
 
-// BG3 purple checker (bg index 2, 4-color). Two solid 8x8 2bpp tiles using
-// palette-0 indices 2 (light) and 3 (dark) -- the console font only uses index 1,
-// so no conflict. Source colors from tetris-game-bg.png.
-const u8 CHECKER_TILES[32] = {
-    0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF, // tile0: all index 2 (light)
+// BG3 background (bg index 2, 4-color / 2bpp), reproducing the play-area layout
+// from tetris-bg.png: purple checker play field, dark frame, yellow/orange
+// checker surround. Three solid 8x8 tiles recolored via two palettes:
+//   pal0: idx2=purple-light, idx3=purple-dark          (play area)
+//   pal1: idx1=frame-dark, idx2=yellow-light, idx3=orange-dark (frame+surround)
+// (The console font uses palette-0 idx1, so play-area tiles avoid idx1.)
+const u8 BG3_TILES[48] = {
+    0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF, // tile0: all idx2 (checker light)
     0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF,
-    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF, // tile1: all index 3 (dark)
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF, // tile1: all idx3 (checker dark)
     0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+    0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00, // tile2: all idx1 (solid frame)
+    0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00,
 };
 u16 bg3map[32 * 32];
+
+// Play area bounds in 8x8 tiles (9x12 blocks = 18x24 tiles).
+#define PA_X0 PF_TX
+#define PA_Y0 PF_TY
+#define PA_X1 (PF_TX + 2 * GRID_W - 1)
+#define PA_Y1 (PF_TY + 2 * GRID_H - 1)
 
 // SNES BGR15 color from 8-bit RGB
 #define RGB15(r, g, b) (((u16)((b) >> 3) << 10) | ((u16)((g) >> 3) << 5) | ((r) >> 3))
@@ -427,15 +438,30 @@ void gfxInit(void)
             setPaletteColor((c + 1) * 16 + k, BLOCK_PAL[c][k]);
         }
 
-    // BG3 purple checker: tiles + palette-0 colors 2/3 + a checkered tilemap.
-    dmaCopyVram((u8 *)CHECKER_TILES, BG3_CHR, sizeof(CHECKER_TILES));
-    setPaletteColor(2, RGB15(125, 111, 201)); // light purple
-    setPaletteColor(3, RGB15(120, 89, 194));  // dark purple
+    // BG3 background: tiles + palettes + a region-aware tilemap (play area,
+    // frame, surround).
+    dmaCopyVram((u8 *)BG3_TILES, BG3_CHR, sizeof(BG3_TILES));
+    setPaletteColor(2, RGB15(155, 149, 179)); // pal0 idx2: purple light (play)
+    setPaletteColor(3, RGB15(115, 107, 148)); // pal0 idx3: purple dark
+    setPaletteColor(5, RGB15(46, 46, 37));    // pal1 idx1: frame dark
+    setPaletteColor(6, RGB15(238, 213, 73));  // pal1 idx2: yellow light (surround)
+    setPaletteColor(7, RGB15(229, 156, 57));  // pal1 idx3: orange dark
     {
         u8 tx, ty;
         for (ty = 0; ty < 32; ty++)
             for (tx = 0; tx < 32; tx++)
-                bg3map[ty * 32 + tx] = ((tx + ty) & 1) ? 1 : 0; // dark/light, palette 0
+            {
+                u16 checker = ((tx + ty) & 1) ? 1 : 0; // dark : light
+                u8 inPlay = (tx >= PA_X0 && tx <= PA_X1 && ty >= PA_Y0 && ty <= PA_Y1);
+                u8 inFrame = (tx >= PA_X0 - 1 && tx <= PA_X1 + 1 &&
+                              ty >= PA_Y0 - 1 && ty <= PA_Y1 + 1 && !inPlay);
+                if (inPlay)
+                    bg3map[ty * 32 + tx] = checker;              // pal0 purple checker
+                else if (inFrame)
+                    bg3map[ty * 32 + tx] = 2 | (1 << 10);        // pal1 solid frame
+                else
+                    bg3map[ty * 32 + tx] = checker | (1 << 10);  // pal1 yellow checker
+            }
     }
     bgSetGfxPtr(2, BG3_CHR);
     bgSetMapPtr(2, BG3_MAP, SC_32x32);
