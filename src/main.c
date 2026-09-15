@@ -143,16 +143,37 @@ u16 bg1map[32 * 32];  // RAM copy of BG1 tilemap; DMA'd to VRAM on change
 // bomb block.anim: bomb1(4f), bomb2(4f), bomb3(3f)  -> 11-frame loop.
 #define BOMB_LEN 11
 const u8 BOMB_SEQ[BOMB_LEN] = {0,0,0,0, 1,1,1,1, 2,2,2};
-// Wild: flash as fast as possible -- 1 frame per color (per creator's request).
-// Exact clip order yellow,pink,purple,blue,green -> slots 7,3,4,2,1 (slot 7 =
-// yellow, freed by moving the bomb to a sprite).
+// Wild: flash as fast as possible -- 1 frame per color. Wild blocks always use
+// ONE palette slot (WILD_SLOT); we animate by cycling THAT palette's colors each
+// frame (cheap CGRAM writes) instead of rebuilding the tilemap -- so the wild
+// flash costs nothing per frame. Exact clip order yellow,pink,purple,blue,green.
+#define WILD_SLOT 7
 #define WILD_LEN 5
-const u8 WILD_SEQ[WILD_LEN] = {7, 3, 4, 2, 1}; // slot per frame (1 frame each)
+const u16 WILD_SH[WILD_LEN][3] = { // {dark, light, mid} per color
+    {RGB15(248,120,0), RGB15(248,248,0),  RGB15(248,184,0)}, // yellow
+    {RGB15(248,0,144), RGB15(248,128,184),RGB15(248,24,96) }, // pink
+    {RGB15(61,0,124),  RGB15(126,0,255),  RGB15(86,0,174)  }, // purple
+    {RGB15(125,62,242),RGB15(64,248,248), RGB15(152,96,255)}, // blue
+    {RGB15(0,107,0),   RGB15(0,255,0),    RGB15(0,180,0)   }, // green
+};
 
 // Animation state (advanced each frame in the main loop).
 u16 animClock;
 u8 bombFrame;   // 0..2  -> BOMB_SEQ[animClock % BOMB_LEN]
-u8 wildSlot;    // 1..5  -> WILD_SEQ[animClock % WILD_LEN]
+
+// D-pad auto-repeat: move once on press, then repeat while held.
+#define REPEAT_INITIAL 10  // frames before auto-repeat starts
+#define REPEAT_RATE 3      // frames between repeats
+u8 moveDelay;
+
+// Cycle the wild palette (slot 7) to the next color. Cheap; call each vblank.
+void cycleWild(void)
+{
+    u8 c = animClock % WILD_LEN;
+    setPaletteColor(WILD_SLOT * 16 + 2, WILD_SH[c][0]); // dark
+    setPaletteColor(WILD_SLOT * 16 + 3, WILD_SH[c][1]); // light
+    setPaletteColor(WILD_SLOT * 16 + 5, WILD_SH[c][2]); // mid
+}
 
 // Placement "pop": a brief reticle flash at the cells a piece just landed on
 // (feedback, since BG tiles can't scale like the Unity 1.2x pop). Uses OBJ
@@ -446,7 +467,7 @@ void startGame(void)
     gameOver = 0;
     spawnInterval = SPAWN_MAX;
     spawnTimer = spawnInterval;
-    animClock = 0; bombFrame = BOMB_SEQ[0]; wildSlot = WILD_SEQ[0];
+    animClock = 0; bombFrame = BOMB_SEQ[0];
     popTimer = 0; popN = 0; // crt0 doesn't zero BSS; avoid garbage pop sprites
     spawnPiece();     // first piece is free
     hasActive = 1;
@@ -467,14 +488,14 @@ void formatNum(u16 n, char *buf, u8 digits)
 // Unity wild animation).
 u8 slotForField(u8 v)
 {
-    if (v == WILD) return wildSlot;
+    if (v == WILD) return WILD_SLOT;
     return (v >= 1 && v <= 5) ? v : 5;
 }
 
 // Palette slot (1..5) for an *active cellColor* (raw color 0..4, or WILD).
 u8 slotForColor(u8 cc)
 {
-    if (cc == WILD) return wildSlot;
+    if (cc == WILD) return WILD_SLOT;
     return (cc <= 4) ? (cc + 1) : 5;
 }
 
@@ -496,11 +517,11 @@ void gfxInit(void)
         {
             setPaletteColor((c + 1) * 16 + k, BLOCK_PAL[c][k]);
         }
-    // Slot 7 = yellow (the bomb no longer needs a BG palette) so wild is exact.
-    {
-        const u16 YEL[6] = {0, BLK, RGB15(248,120,0), RGB15(248,248,0), WHT, RGB15(248,184,0)};
-        for (k = 0; k < 6; k++) { setPaletteColor(7 * 16 + k, YEL[k]); }
-    }
+    // Slot 7 = the WILD palette. Static outline/white; the 3 shades (idx2,3,5)
+    // are cycled each frame by cycleWild() for the rainbow flash.
+    setPaletteColor(WILD_SLOT * 16 + 1, BLK); // black outline
+    setPaletteColor(WILD_SLOT * 16 + 4, WHT); // white
+    cycleWild();                              // seed shades for the first frame
 
     // --- bg1: pixel-accurate background scene (16-color, behind blocks) ---
     dmaCopyVram((u8 *)&scenetiles, SCN_CHR, (u16)(&scenetiles_end - &scenetiles));
@@ -687,7 +708,9 @@ int main(void)
 
     while (1)
     {
+        unsigned short held;
         down = padsDown(0);
+        held = padsCurrent(0);
 
         if (gameOver)
         {
@@ -712,10 +735,25 @@ int main(void)
 
             if (hasActive)
             {
-                if (down & KEY_UP)    tryMove(0, -1);
-                if (down & KEY_DOWN)  tryMove(0, 1);
-                if (down & KEY_LEFT)  tryMove(-1, 0);
-                if (down & KEY_RIGHT) tryMove(1, 0);
+                // D-pad movement with auto-repeat (press once, then repeat held).
+                int dx = (held & KEY_LEFT) ? -1 : (held & KEY_RIGHT) ? 1 : 0;
+                int dy = (held & KEY_UP) ? -1 : (held & KEY_DOWN) ? 1 : 0;
+                if (dx || dy)
+                {
+                    if (down & (KEY_LEFT | KEY_RIGHT | KEY_UP | KEY_DOWN))
+                    {
+                        tryMove(dx, dy);          // immediate on fresh press
+                        moveDelay = REPEAT_INITIAL;
+                    }
+                    else if (moveDelay > 0 && --moveDelay == 0)
+                    {
+                        tryMove(dx, dy);          // auto-repeat
+                        moveDelay = REPEAT_RATE;
+                    }
+                }
+                else
+                    moveDelay = 0;
+
                 if (down & (KEY_R | KEY_X)) tryRotate(1);
                 if (down & (KEY_L | KEY_Y)) tryRotate(-1);
                 if (down & KEY_A)
@@ -725,32 +763,22 @@ int main(void)
             }
         }
 
-        // Advance bomb + wild animations using the clips' exact per-frame timing.
-        {
-            u8 bf, ws;
-            animClock++;
-            bf = BOMB_SEQ[animClock % BOMB_LEN];
-            ws = WILD_SEQ[animClock % WILD_LEN];
-            if (bf != bombFrame || ws != wildSlot)
-            {
-                bombFrame = bf;
-                wildSlot = ws;
-                dirty = 1;
-            }
-            if (popTimer) { popTimer--; dirty = 1; } // animate the placement pop
-        }
+        // Per-frame animation is CHEAP (sprites + one palette write): the bomb
+        // sprite frame, the placement pop, and the wild palette cycle. These do
+        // NOT rebuild the tilemap, so they don't force the expensive redraw.
+        animClock++;
+        bombFrame = BOMB_SEQ[animClock % BOMB_LEN];
+        if (popTimer) popTimer--;
 
+        if (dirty) drawGrid();   // rebuild tilemap + HUD only on real changes
+        renderReticle();         // reticle + bomb sprite + pop (OAM), every frame
+
+        WaitForVBlank();
+        cycleWild();             // wild rainbow via palette (CGRAM), every frame
         if (dirty)
         {
-            drawGrid();
-            renderReticle();
-            WaitForVBlank();
             dmaCopyVram((u8 *)bg1map, BLK_MAP, sizeof(bg1map));
             dirty = 0;
-        }
-        else
-        {
-            WaitForVBlank();
         }
     }
     return 0;
