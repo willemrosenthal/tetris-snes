@@ -131,11 +131,11 @@ u16 bg1map[32 * 32];  // RAM copy of BG1 tilemap; DMA'd to VRAM on change
 // bomb block.anim: bomb1(4f), bomb2(4f), bomb3(3f)  -> 11-frame loop.
 #define BOMB_LEN 11
 const u8 BOMB_SEQ[BOMB_LEN] = {0,0,0,0, 1,1,1,1, 2,2,2};
-// wild block.anim order yellow,pink,purple,blue,green @ 2,2,2,2,1 -> 9-frame loop.
-// Mapped to our palette slots (game colors green1,blue2,pink3,purple4,orange5);
-// the clip's yellow isn't one of the 5 game palettes, so orange(5) stands in.
-#define WILD_LEN 9
-const u8 WILD_SEQ[WILD_LEN] = {5,5, 3,3, 4,4, 2,2, 1}; // slot per frame
+// Wild: flash as fast as possible -- 1 frame per color (per creator's request).
+// Order yellow,pink,purple,blue,green mapped to our palette slots (game colors
+// green1,blue2,pink3,purple4,orange5); orange(5) stands in for the clip's yellow.
+#define WILD_LEN 5
+const u8 WILD_SEQ[WILD_LEN] = {5, 3, 4, 2, 1}; // slot per frame (1 frame each)
 
 // Animation state (advanced each frame in the main loop).
 u16 animClock;
