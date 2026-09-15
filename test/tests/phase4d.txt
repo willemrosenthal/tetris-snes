@@ -1,0 +1,9 @@
+# Phase 4d: let the tube fill (don't place) -> game over, then restart
+wait 40
+shot d1_start        # TUBE 0/5, first piece active
+wait 2200            # idle: marbles accumulate
+shot d2_gameover     # expect TUBE 5/5, GAME OVER
+press start 12
+wait 20
+shot d3_restart      # fresh board, TUBE reset, new piece
+stop

@@ -63,6 +63,17 @@ u8 pieceIsBomb;                      // current piece is a bomb
 u8 dirty;
 u16 score;
 
+// Marble queue + spawn timer + lose condition (port of BlockLibrary)
+#define TUBE_MAX 5    // 5 marbles queued = game over
+#define SPAWN_MAX 300 // ~5.0s at 60Hz (marbleSpawnMaxTime)
+#define SPAWN_MIN 57  // ~0.95s (marbleSpawnMinTime)
+u8 queue;         // marbles waiting in the tube
+u8 hasActive;     // an active piece is currently in play
+u8 gameOver;
+u16 spawnTimer;   // frames until the next marble
+u16 spawnInterval;
+u8 speedPct;      // 0..100 acceleration (marbleSpawnTimer speeds up over time)
+
 //---------------------------------------------------------------------------------
 u8 randn(u8 n) { return (u8)(rand() % n); }
 
@@ -267,19 +278,19 @@ void explodeBomb(int bx, int by)
     if (n > 0) { score += n * 50; dirty = 1; }
 }
 
-void placePiece(void)
+// Returns 1 if the piece was placed (caller pulls the next one from the queue).
+u8 placePiece(void)
 {
     u8 i;
     if (!canPlace())
-        return; // overlap -> rejected
+        return 0; // overlap -> rejected
 
     if (pieceIsBomb)
     {
         int bx = pieceX + curX[0], by = pieceY + curY[0];
         field[bx][by] = 1;      // temp non-empty so the bomb cell is counted
         explodeBomb(bx, by);
-        spawnPiece();
-        return;
+        return 1;
     }
 
     for (i = 0; i < cellCount; i++)
@@ -294,7 +305,37 @@ void placePiece(void)
     for (i = 0; i < cellCount; i++)
         justPlaced[pieceX + curX[i]][pieceY + curY[i]] = 0;
 
-    spawnPiece();
+    return 1;
+}
+
+// A marble arrives in the tube; the spawn interval accelerates each time.
+// Filling the tube (TUBE_MAX) ends the game.
+void spawnMarble(void)
+{
+    queue++;
+    dirty = 1;
+    if (queue >= TUBE_MAX)
+    {
+        gameOver = 1;
+        return;
+    }
+    if (speedPct < 100) speedPct++;
+    spawnInterval = SPAWN_MAX - (u16)(((u32)(SPAWN_MAX - SPAWN_MIN) * speedPct) / 100);
+    spawnTimer = spawnInterval;
+}
+
+void startGame(void)
+{
+    clearBoard();
+    score = 0;
+    queue = 0;
+    speedPct = 0;
+    gameOver = 0;
+    spawnInterval = SPAWN_MAX;
+    spawnTimer = spawnInterval;
+    spawnPiece();     // first piece is free
+    hasActive = 1;
+    dirty = 1;
 }
 
 //---------------------------------------------------------------------------------
@@ -333,16 +374,17 @@ void drawGrid(void)
             cells[x][y] = (v == EMPTY) ? '.' : (v == WILD) ? '?' : PLACED_CH[v - 1];
         }
 
-    for (i = 0; i < cellCount; i++)
-    {
-        int cx = pieceX + curX[i];
-        int cy = pieceY + curY[i];
-        char g = (cellColor[i] == BOMB) ? '@'
-               : (cellColor[i] == WILD) ? 'W'
-               : ACTIVE_CH[cellColor[i]];
-        if (cx >= 0 && cx < GRID_W && cy >= 0 && cy < GRID_H)
-            cells[cx][cy] = (field[cx][cy] != EMPTY) ? '*' : g;
-    }
+    if (hasActive && !gameOver)
+        for (i = 0; i < cellCount; i++)
+        {
+            int cx = pieceX + curX[i];
+            int cy = pieceY + curY[i];
+            char g = (cellColor[i] == BOMB) ? '@'
+                   : (cellColor[i] == WILD) ? 'W'
+                   : ACTIVE_CH[cellColor[i]];
+            if (cx >= 0 && cx < GRID_W && cy >= 0 && cy < GRID_H)
+                cells[cx][cy] = (field[cx][cy] != EMPTY) ? '*' : g;
+        }
 
     for (y = 0; y < GRID_H; y++)
     {
@@ -352,13 +394,22 @@ void drawGrid(void)
         consoleDrawText(GRID_X, GRID_Y + y, "%s", row);
     }
 
-    consoleDrawText(GRID_X - 1, GRID_Y + GRID_H + 2,
-                    canPlace() ? "PLACE: OK " : "PLACE: NO ");
     {
         char sbuf[7];
         formatNum(score, sbuf, 6);
         consoleDrawText(1, 3, "SCORE %s", sbuf);
     }
+    // Tube fill (marbles waiting) -- fills toward TUBE_MAX = game over
+    {
+        char tbuf[2];
+        tbuf[0] = '0' + queue;
+        tbuf[1] = 0;
+        consoleDrawText(GRID_X - 1, GRID_Y + GRID_H + 2, "TUBE %s/5", tbuf);
+    }
+    if (gameOver)
+        consoleDrawText(GRID_X - 2, GRID_Y + GRID_H + 3, "GAME OVER-START");
+    else
+        consoleDrawText(GRID_X - 2, GRID_Y + GRID_H + 3, "               ");
 }
 
 //---------------------------------------------------------------------------------
@@ -374,9 +425,7 @@ int main(void)
     bgSetDisable(2);
 
     srand(0x1234); // fixed seed for now (deterministic); randomize in a later phase
-    clearBoard();
-    score = 0;
-    spawnPiece();
+    startGame();
     drawStatic();
     setScreenOn();
 
@@ -390,13 +439,41 @@ int main(void)
     {
         down = padsDown(0);
 
-        if (down & KEY_UP)    tryMove(0, -1);
-        if (down & KEY_DOWN)  tryMove(0, 1);
-        if (down & KEY_LEFT)  tryMove(-1, 0);
-        if (down & KEY_RIGHT) tryMove(1, 0);
-        if (down & (KEY_R | KEY_X)) tryRotate(1);
-        if (down & (KEY_L | KEY_Y)) tryRotate(-1);
-        if (down & KEY_A)     placePiece();
+        if (gameOver)
+        {
+            if (down & (KEY_START | KEY_A)) startGame();
+        }
+        else
+        {
+            // Marble spawn timer. When the tube is empty and we have no piece,
+            // spawn immediately so the player is never starved (like the original).
+            if (queue == 0 && !hasActive) spawnTimer = 0;
+            if (spawnTimer > 0) spawnTimer--;
+            if (spawnTimer == 0) spawnMarble();
+
+            // Pull the next piece from the tube when we have none
+            if (!hasActive && queue > 0 && !gameOver)
+            {
+                queue--;
+                spawnPiece();
+                hasActive = 1;
+                dirty = 1;
+            }
+
+            if (hasActive)
+            {
+                if (down & KEY_UP)    tryMove(0, -1);
+                if (down & KEY_DOWN)  tryMove(0, 1);
+                if (down & KEY_LEFT)  tryMove(-1, 0);
+                if (down & KEY_RIGHT) tryMove(1, 0);
+                if (down & (KEY_R | KEY_X)) tryRotate(1);
+                if (down & (KEY_L | KEY_Y)) tryRotate(-1);
+                if (down & KEY_A)
+                {
+                    if (placePiece()) { hasActive = 0; dirty = 1; }
+                }
+            }
+        }
 
         if (dirty)
         {
