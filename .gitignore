@@ -1,3 +1,6 @@
+# macOS
+.DS_Store
+
 # PVSnesLib build artifacts
 *.obj
 *.o
