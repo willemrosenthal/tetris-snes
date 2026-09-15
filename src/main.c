@@ -106,16 +106,17 @@ extern char font2pal, font2pal_end;
 // Per-color palettes sampled from tetris-blocks.png. Order MUST match how
 // gfx4snes indexed the (transparency-reserved) master tile's pixels:
 //  idx0 = transparent, 1 = BLACK outline, 2 = DARK, 3 = LIGHT, 4 = WHITE, 5 = MID.
-// (Verified from block_master.pal.) Colors 0..4 -> palette slots 1..5.
+// The game's 5 colors are blockType 0..4 (Block.prefab blockArt, totalColors=5):
+//  0=green, 1=blue, 2=pink, 3=purple, 4=orange. -> palette slots 1..5.
 #define BLK RGB15(0, 0, 0)
 #define WHT RGB15(252, 252, 252)
 const u16 BLOCK_PAL[5][6] = {
     //  0(transp) 1=black 2=dark            3=light             4=white 5=mid
-    {0, BLK, RGB15(107,0,0),    RGB15(255,16,16),   WHT, RGB15(165,0,0)   }, // red
-    {0, BLK, RGB15(0,107,0),    RGB15(0,255,0),     WHT, RGB15(0,180,0)   }, // green
-    {0, BLK, RGB15(125,62,242), RGB15(64,248,248),  WHT, RGB15(152,96,255)}, // blue
-    {0, BLK, RGB15(248,120,0),  RGB15(248,248,0),   WHT, RGB15(248,184,0) }, // yellow
-    {0, BLK, RGB15(248,0,144),  RGB15(248,128,184), WHT, RGB15(248,24,96) }, // pink
+    {0, BLK, RGB15(0,107,0),    RGB15(0,255,0),     WHT, RGB15(0,180,0)   }, // 0 green
+    {0, BLK, RGB15(125,62,242), RGB15(64,248,248),  WHT, RGB15(152,96,255)}, // 1 blue
+    {0, BLK, RGB15(248,0,144),  RGB15(248,128,184), WHT, RGB15(248,24,96) }, // 2 pink
+    {0, BLK, RGB15(61,0,124),   RGB15(126,0,255),   WHT, RGB15(86,0,174)  }, // 3 purple
+    {0, BLK, RGB15(200,56,0),   RGB15(248,184,0),   WHT, RGB15(248,120,0) }, // 4 orange
 };
 
 u16 bg1map[32 * 32];  // RAM copy of BG1 tilemap; DMA'd to VRAM on change
@@ -124,13 +125,22 @@ u16 bg1map[32 * 32];  // RAM copy of BG1 tilemap; DMA'd to VRAM on change
 // Frame f (0..2) top-left tile = BOMB_T0 + f*4.
 #define BOMB_T0 5
 #define BOMB_PAL 7           // bomb uses BG palette 7 (CGRAM 112-127)
-#define NBOMBFRAMES 3
-#define WILD_COLORS 5        // wild cycles through the 5 block palettes
 
-// Animation state (advanced on a timer in the main loop).
-u8 animTimer;
-u8 bombFrame;   // 0..2
-u8 wildPhase;   // 0..4 -> wild block palette slot = wildPhase+1
+// Animation timing from the Unity clips (60fps == our frame rate). Per-frame
+// hold times VARY, so we drive each from a per-frame lookup indexed by a clock.
+// bomb block.anim: bomb1(4f), bomb2(4f), bomb3(3f)  -> 11-frame loop.
+#define BOMB_LEN 11
+const u8 BOMB_SEQ[BOMB_LEN] = {0,0,0,0, 1,1,1,1, 2,2,2};
+// wild block.anim order yellow,pink,purple,blue,green @ 2,2,2,2,1 -> 9-frame loop.
+// Mapped to our palette slots (game colors green1,blue2,pink3,purple4,orange5);
+// the clip's yellow isn't one of the 5 game palettes, so orange(5) stands in.
+#define WILD_LEN 9
+const u8 WILD_SEQ[WILD_LEN] = {5,5, 3,3, 4,4, 2,2, 1}; // slot per frame
+
+// Animation state (advanced each frame in the main loop).
+u16 animClock;
+u8 bombFrame;   // 0..2  -> BOMB_SEQ[animClock % BOMB_LEN]
+u8 wildSlot;    // 1..5  -> WILD_SEQ[animClock % WILD_LEN]
 
 //---------------------------------------------------------------------------------
 u8 randn(u8 n) { return (u8)(rand() % n); }
@@ -407,6 +417,7 @@ void startGame(void)
     gameOver = 0;
     spawnInterval = SPAWN_MAX;
     spawnTimer = spawnInterval;
+    animClock = 0; bombFrame = BOMB_SEQ[0]; wildSlot = WILD_SEQ[0];
     spawnPiece();     // first piece is free
     hasActive = 1;
     dirty = 1;
@@ -426,14 +437,14 @@ void formatNum(u16 n, char *buf, u8 digits)
 // Unity wild animation).
 u8 slotForField(u8 v)
 {
-    if (v == WILD) return 1 + wildPhase;
+    if (v == WILD) return wildSlot;
     return (v >= 1 && v <= 5) ? v : 5;
 }
 
 // Palette slot (1..5) for an *active cellColor* (raw color 0..4, or WILD).
 u8 slotForColor(u8 cc)
 {
-    if (cc == WILD) return 1 + wildPhase;
+    if (cc == WILD) return wildSlot;
     return (cc <= 4) ? (cc + 1) : 5;
 }
 
@@ -630,13 +641,18 @@ int main(void)
             }
         }
 
-        // Animate bomb (3 frames) + wild (rainbow palette cycle) on a timer.
-        if (++animTimer >= 10)
+        // Advance bomb + wild animations using the clips' exact per-frame timing.
         {
-            animTimer = 0;
-            bombFrame = (bombFrame + 1) % NBOMBFRAMES;
-            wildPhase = (wildPhase + 1) % WILD_COLORS;
-            dirty = 1;
+            u8 bf, ws;
+            animClock++;
+            bf = BOMB_SEQ[animClock % BOMB_LEN];
+            ws = WILD_SEQ[animClock % WILD_LEN];
+            if (bf != bombFrame || ws != wildSlot)
+            {
+                bombFrame = bf;
+                wildSlot = ws;
+                dirty = 1;
+            }
         }
 
         if (dirty)
