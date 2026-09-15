@@ -94,7 +94,8 @@ extern char reticlepal, reticlepal_end;
 // Placement reticle sprites (OBJ): one 16x16 sprite per active-piece cell,
 // overlaying the piece so it's clearly "being placed" vs settled blocks.
 #define OBJ_CHR 0x4000   // OBJ tile VRAM (free 0x3700..0x5000, 0x2000-aligned)
-#define OBJ_PAL 0        // OBJ palette 0 (CGRAM 128-143)
+#define OBJ_PAL 0        // OBJ palette 0 (CGRAM 128-143): white reticle
+#define OBJ_PAL_RED 1    // OBJ palette 1: red reticle (invalid placement)
 // Play-area top-left pixel; cell (cx,cy) -> screen (PF_PX+cx*16, PF_PY+cy*16).
 #define PF_PX (PF_TX * 8)
 #define PF_PY (PF_TY * 8)
@@ -496,6 +497,10 @@ void gfxInit(void)
     oamInitGfxSet((u8 *)&reticletiles, (u16)(&reticletiles_end - &reticletiles),
                   (u8 *)&reticlepal, (u16)(&reticlepal_end - &reticlepal),
                   OBJ_PAL, OBJ_CHR, OBJ_SIZE16_L32);
+    // OBJ palette 1 = RED reticle (shown when placement is invalid/overlapping).
+    // reticle tiles use idx1 (white) + idx2 (black); recolor idx1 to red.
+    setPaletteColor(128 + OBJ_PAL_RED * 16 + 1, RGB15(248, 24, 24)); // red
+    setPaletteColor(128 + OBJ_PAL_RED * 16 + 2, RGB15(80, 0, 0));    // dark red
     oamClear(0, 0); // hide all sprites initially
 }
 
@@ -509,12 +514,15 @@ void renderReticle(void)
         for (i = 0; i < 4; i++) oamSetVisible(i * 4, OBJ_HIDE);
         return;
     }
-    for (i = 0; i < cellCount; i++)
     {
-        int cx = pieceX + curX[i];
-        int cy = pieceY + curY[i];
-        oamSet(i * 4, PF_PX + cx * 16, PF_PY + cy * 16, 2, 0, 0, 0, OBJ_PAL);
-        oamSetEx(i * 4, OBJ_SMALL, OBJ_SHOW);
+        u8 pal = canPlace() ? OBJ_PAL : OBJ_PAL_RED; // red when overlapping
+        for (i = 0; i < cellCount; i++)
+        {
+            int cx = pieceX + curX[i];
+            int cy = pieceY + curY[i];
+            oamSet(i * 4, PF_PX + cx * 16, PF_PY + cy * 16, 2, 0, 0, 0, pal);
+            oamSetEx(i * 4, OBJ_SMALL, OBJ_SHOW);
+        }
     }
     for (i = cellCount; i < 4; i++) oamSetVisible(i * 4, OBJ_HIDE);
 }
