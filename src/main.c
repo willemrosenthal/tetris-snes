@@ -154,6 +154,14 @@ u16 animClock;
 u8 bombFrame;   // 0..2  -> BOMB_SEQ[animClock % BOMB_LEN]
 u8 wildSlot;    // 1..5  -> WILD_SEQ[animClock % WILD_LEN]
 
+// Placement "pop": a brief reticle flash at the cells a piece just landed on
+// (feedback, since BG tiles can't scale like the Unity 1.2x pop). Uses OBJ
+// sprites 4..7. popTimer counts down frames.
+#define POP_FRAMES 8
+u8 popTimer;
+u8 popN;
+s8 popX[4], popY[4];
+
 //---------------------------------------------------------------------------------
 u8 randn(u8 n) { return (u8)(rand() % n); }
 
@@ -396,6 +404,15 @@ u8 placePiece(void)
         justPlaced[pieceX + curX[i]][pieceY + curY[i]] = 1;
     }
 
+    // Record cells for the placement pop flash.
+    popN = cellCount;
+    for (i = 0; i < cellCount; i++)
+    {
+        popX[i] = pieceX + curX[i];
+        popY[i] = pieceY + curY[i];
+    }
+    popTimer = POP_FRAMES;
+
     resolveMatches();
 
     for (i = 0; i < cellCount; i++)
@@ -430,6 +447,7 @@ void startGame(void)
     spawnInterval = SPAWN_MAX;
     spawnTimer = spawnInterval;
     animClock = 0; bombFrame = BOMB_SEQ[0]; wildSlot = WILD_SEQ[0];
+    popTimer = 0; popN = 0; // crt0 doesn't zero BSS; avoid garbage pop sprites
     spawnPiece();     // first piece is free
     hasActive = 1;
     dirty = 1;
@@ -550,6 +568,20 @@ void renderReticle(void)
     }
     else
         oamSetVisible(BOMB_OAM, OBJ_HIDE);
+
+    // Placement pop: flash a white reticle at the just-placed cells (sprites 4..7).
+    if (popTimer && (popTimer & 2)) // blink on/off as it counts down
+    {
+        for (i = 0; i < popN; i++)
+        {
+            oamSet((4 + i) * 4, PF_PX + popX[i] * 16, PF_PY + popY[i] * 16,
+                   2, 0, 0, 0, OBJ_PAL);
+            oamSetEx((4 + i) * 4, OBJ_SMALL, OBJ_SHOW);
+        }
+        for (i = popN; i < 4; i++) oamSetVisible((4 + i) * 4, OBJ_HIDE);
+    }
+    else
+        for (i = 0; i < 4; i++) oamSetVisible((4 + i) * 4, OBJ_HIDE);
 }
 
 void drawStatic(void)
@@ -705,6 +737,7 @@ int main(void)
                 wildSlot = ws;
                 dirty = 1;
             }
+            if (popTimer) { popTimer--; dirty = 1; } // animate the placement pop
         }
 
         if (dirty)
