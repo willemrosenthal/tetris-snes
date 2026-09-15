@@ -8,6 +8,15 @@ blocktiles:
 .incbin "gfx/block_master.pic"
 blocktiles_end:
 
+; Bomb: 12 tiles = 3 animation frames x 4 (TL,TR,BL,BR). From tetris-blocks.png.
+bombtiles:
+.incbin "gfx/bomb.pic"
+bombtiles_end:
+
+bombpal:
+.incbin "gfx/bomb.pal"
+bombpal_end:
+
 ; Pixel-accurate background SCENE (16-color, 4bpp): real checker (tetris-game-bg)
 ; + play-area grid (play-area.png, with top/left shadow) + 5px blue/white/cyan
 ; frame (play-area-frame.png). 23 reduced tiles + full 32x28 tilemap.

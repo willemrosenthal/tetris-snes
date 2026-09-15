@@ -25,7 +25,7 @@
 #define GEN_COLORS 5 /* prefab totalColors: pieces use colors 0..4 */
 #define WILD 99      /* field value / cellColor marker: matches any color */
 #define BOMB 98      /* cellColor marker for an active bomb piece */
-#define WILD_CHANCE 5  /* percent, per cell (prefab wildChance 0.05) */
+#define WILD_CHANCE 5   /* percent, per cell (prefab wildChance 0.05) */
 #define BOMB_CHANCE 10 /* percent, per piece */
 
 // field[x][y]: 0 = empty, otherwise (color index + 1)
@@ -81,6 +81,8 @@ u8 speedPct;      // 0..100 acceleration (marbleSpawnTimer speeds up over time)
 //     (checker + play-area grid + frame), converted whole from the Unity assets
 //   bg2 (BG3, 2bpp, high priority): console HUD text (font is 2-color)
 extern char blocktiles, blocktiles_end;
+extern char bombtiles, bombtiles_end;
+extern char bombpal, bombpal_end;
 extern char scenetiles, scenetiles_end;
 extern char scenemap, scenemap_end;
 extern char scenepal, scenepal_end;
@@ -117,6 +119,18 @@ const u16 BLOCK_PAL[5][6] = {
 };
 
 u16 bg1map[32 * 32];  // RAM copy of BG1 tilemap; DMA'd to VRAM on change
+
+// Bomb: 12 tiles loaded after the 4 block tiles -> VRAM tiles 5..16.
+// Frame f (0..2) top-left tile = BOMB_T0 + f*4.
+#define BOMB_T0 5
+#define BOMB_PAL 7           // bomb uses BG palette 7 (CGRAM 112-127)
+#define NBOMBFRAMES 3
+#define WILD_COLORS 5        // wild cycles through the 5 block palettes
+
+// Animation state (advanced on a timer in the main loop).
+u8 animTimer;
+u8 bombFrame;   // 0..2
+u8 wildPhase;   // 0..4 -> wild block palette slot = wildPhase+1
 
 //---------------------------------------------------------------------------------
 u8 randn(u8 n) { return (u8)(rand() % n); }
@@ -396,16 +410,18 @@ void formatNum(u16 n, char *buf, u8 digits)
 }
 
 // Palette slot (1..5) for a *stored field value* (color+1, i.e. 1..5, or WILD).
+// Wild cycles through all block palettes over time (rainbow flash, like the
+// Unity wild animation).
 u8 slotForField(u8 v)
 {
-    if (v == WILD) return 5; // TODO 5c: distinct wild art
+    if (v == WILD) return 1 + wildPhase;
     return (v >= 1 && v <= 5) ? v : 5;
 }
 
-// Palette slot (1..5) for an *active cellColor* (raw color 0..4, or WILD/BOMB).
+// Palette slot (1..5) for an *active cellColor* (raw color 0..4, or WILD).
 u8 slotForColor(u8 cc)
 {
-    if (cc == WILD || cc == BOMB) return 5; // TODO 5c: distinct wild/bomb art
+    if (cc == WILD) return 1 + wildPhase;
     return (cc <= 4) ? (cc + 1) : 5;
 }
 
@@ -417,8 +433,9 @@ void gfxInit(void)
     u8 c, k;
 
     // --- bg0: blocks (16-color, front-most BG) ---
-    // Load the 4 block tiles at VRAM tile #1 (tile 0 stays blank/transparent).
+    // Block tiles at VRAM tile #1 (tile 0 stays blank); bomb tiles follow (5..16).
     dmaCopyVram((u8 *)&blocktiles, BLK_CHR + 16, (u16)(&blocktiles_end - &blocktiles));
+    dmaCopyVram((u8 *)&bombtiles, BLK_CHR + BOMB_T0 * 16, (u16)(&bombtiles_end - &bombtiles));
     bgSetGfxPtr(0, BLK_CHR);
     bgSetMapPtr(0, BLK_MAP, SC_32x32);
     // 5 block palettes -> slots 1..5. (setPaletteColor is multi-statement: braces!)
@@ -427,6 +444,8 @@ void gfxInit(void)
         {
             setPaletteColor((c + 1) * 16 + k, BLOCK_PAL[c][k]);
         }
+    // Bomb palette -> slot 7 (16 colors).
+    setPalette((u8 *)&bombpal, BOMB_PAL * 16, 16 * 2);
 
     // --- bg1: pixel-accurate background scene (16-color, behind blocks) ---
     dmaCopyVram((u8 *)&scenetiles, SCN_CHR, (u16)(&scenetiles_end - &scenetiles));
@@ -458,6 +477,19 @@ void putBlock(u8 gx, u8 gy, u8 slot)
     bg1map[base + 33]     = BLOCK_ENTRY(3, slot); // BR
 }
 
+// Place the animated bomb (current frame's 4 tiles) at grid cell (gx,gy).
+void putBomb(u8 gx, u8 gy)
+{
+    u16 tx = PF_TX + gx * 2;
+    u16 ty = PF_TY + gy * 2;
+    u16 base = ty * 32 + tx;
+    u16 t = BOMB_T0 + bombFrame * 4;
+    bg1map[base]      = t       | (BOMB_PAL << 10); // TL
+    bg1map[base + 1]  = (t + 1) | (BOMB_PAL << 10); // TR
+    bg1map[base + 32] = (t + 2) | (BOMB_PAL << 10); // BL
+    bg1map[base + 33] = (t + 3) | (BOMB_PAL << 10); // BR
+}
+
 // Rebuild the BG1 tilemap from the field + active piece (blocks are graphics).
 void renderBlocks(void)
 {
@@ -472,14 +504,24 @@ void renderBlocks(void)
                 putBlock(x, y, slotForField(field[x][y]));
 
     if (hasActive && !gameOver)
-        for (i = 0; i < cellCount; i++)
+    {
+        if (pieceIsBomb)
         {
-            int cx = pieceX + curX[i];
-            int cy = pieceY + curY[i];
-            if (cx >= 0 && cx < GRID_W && cy >= 0 && cy < GRID_H &&
-                field[cx][cy] == EMPTY)
-                putBlock((u8)cx, (u8)cy, slotForColor(cellColor[i]));
+            int cx = pieceX + curX[0];
+            int cy = pieceY + curY[0];
+            if (cx >= 0 && cx < GRID_W && cy >= 0 && cy < GRID_H)
+                putBomb((u8)cx, (u8)cy);
         }
+        else
+            for (i = 0; i < cellCount; i++)
+            {
+                int cx = pieceX + curX[i];
+                int cy = pieceY + curY[i];
+                if (cx >= 0 && cx < GRID_W && cy >= 0 && cy < GRID_H &&
+                    field[cx][cy] == EMPTY)
+                    putBlock((u8)cx, (u8)cy, slotForColor(cellColor[i]));
+            }
+    }
 }
 
 // HUD text (console, bg 0) to the right of the playfield.
@@ -574,6 +616,15 @@ int main(void)
                     if (placePiece()) { hasActive = 0; dirty = 1; }
                 }
             }
+        }
+
+        // Animate bomb (3 frames) + wild (rainbow palette cycle) on a timer.
+        if (++animTimer >= 10)
+        {
+            animTimer = 0;
+            bombFrame = (bombFrame + 1) % NBOMBFRAMES;
+            wildPhase = (wildPhase + 1) % WILD_COLORS;
+            dirty = 1;
         }
 
         if (dirty)
