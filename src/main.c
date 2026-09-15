@@ -78,35 +78,20 @@ u8 speedPct;      // 0..100 acceleration (marbleSpawnTimer speeds up over time)
 // Phase 5a graphics: real 16x16 block art on BG1 (bg index 1). One block shape
 // (4 tiles) recolored by 5 palettes. Console text HUD stays on bg 0.
 extern char blocktiles, blocktiles_end;
+extern char gridtiles, gridtiles_end;
 
 #define BG1_CHR 0x0000   // VRAM word addr of BG1 tiles (tile 0 = blank)
 #define BG1_MAP 0x5000   // VRAM word addr of BG1 tilemap (32x32)
-#define BG3_CHR 0x1000   // VRAM word addr of BG3 checker tiles (must be 0x1000-aligned)
+#define BG3_CHR 0x1000   // VRAM word addr of BG3 grid tiles (must be 0x1000-aligned)
 #define BG3_MAP 0x5800   // VRAM word addr of BG3 tilemap
 #define PF_TX 2          // playfield origin in 8x8 tiles (left)
 #define PF_TY 3          // playfield origin (top). 9x12 blocks = 18x24 tiles.
 
-// BG3 background (bg index 2, 4-color / 2bpp), reproducing the play-area layout
-// from tetris-bg.png: purple checker play field, dark frame, yellow/orange
-// checker surround. Three solid 8x8 tiles recolored via two palettes:
-//   pal0: idx2=purple-light, idx3=purple-dark          (play area)
-//   pal1: idx1=frame-dark, idx2=yellow-light, idx3=orange-dark (frame+surround)
-// (The console font uses palette-0 idx1, so play-area tiles avoid idx1.)
-const u8 BG3_TILES[48] = {
-    0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF, // tile0: all idx2 (checker light)
-    0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF,
-    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF, // tile1: all idx3 (checker dark)
-    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
-    0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00, // tile2: all idx1 (solid frame)
-    0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00,
-};
+// BG3 background (bg index 2, 4-color) = the real purple grid from play-area.png.
+// 9 tiles; the interior is a 2x2 repeat (by row/col parity): tiles 4,5 / 7,8.
+// Grid colors loaded into BG3 palette 1 (CGRAM 4-7) to avoid the console font
+// (palette 0). Grid interior tiles don't use index 0, so no transparency holes.
 u16 bg3map[32 * 32];
-
-// Play area bounds in 8x8 tiles (9x12 blocks = 18x24 tiles).
-#define PA_X0 PF_TX
-#define PA_Y0 PF_TY
-#define PA_X1 (PF_TX + 2 * GRID_W - 1)
-#define PA_Y1 (PF_TY + 2 * GRID_H - 1)
 
 // SNES BGR15 color from 8-bit RGB
 #define RGB15(r, g, b) (((u16)((b) >> 3) << 10) | ((u16)((g) >> 3) << 5) | ((r) >> 3))
@@ -438,29 +423,22 @@ void gfxInit(void)
             setPaletteColor((c + 1) * 16 + k, BLOCK_PAL[c][k]);
         }
 
-    // BG3 background: tiles + palettes + a region-aware tilemap (play area,
-    // frame, surround).
-    dmaCopyVram((u8 *)BG3_TILES, BG3_CHR, sizeof(BG3_TILES));
-    setPaletteColor(2, RGB15(155, 149, 179)); // pal0 idx2: purple light (play)
-    setPaletteColor(3, RGB15(115, 107, 148)); // pal0 idx3: purple dark
-    setPaletteColor(5, RGB15(46, 46, 37));    // pal1 idx1: frame dark
-    setPaletteColor(6, RGB15(238, 213, 73));  // pal1 idx2: yellow light (surround)
-    setPaletteColor(7, RGB15(229, 156, 57));  // pal1 idx3: orange dark
+    // BG3 real purple grid: load the 9 tiles + 4 grid colors (palette 1, CGRAM
+    // 4-7), then tile the interior grid pattern across the whole background.
+    dmaCopyVram((u8 *)&gridtiles, BG3_CHR, (u16)(&gridtiles_end - &gridtiles));
+    setPaletteColor(4, RGB15(82, 24, 189));   // grid idx0 (accent; unused in interior)
+    setPaletteColor(5, RGB15(41, 41, 90));    // grid idx1 (dash)
+    setPaletteColor(6, RGB15(24, 24, 65));    // grid idx2 (dark dash)
+    setPaletteColor(7, RGB15(65, 65, 115));   // grid idx3 (field)
     {
         u8 tx, ty;
         for (ty = 0; ty < 32; ty++)
             for (tx = 0; tx < 32; tx++)
             {
-                u16 checker = ((tx + ty) & 1) ? 1 : 0; // dark : light
-                u8 inPlay = (tx >= PA_X0 && tx <= PA_X1 && ty >= PA_Y0 && ty <= PA_Y1);
-                u8 inFrame = (tx >= PA_X0 - 1 && tx <= PA_X1 + 1 &&
-                              ty >= PA_Y0 - 1 && ty <= PA_Y1 + 1 && !inPlay);
-                if (inPlay)
-                    bg3map[ty * 32 + tx] = checker;              // pal0 purple checker
-                else if (inFrame)
-                    bg3map[ty * 32 + tx] = 2 | (1 << 10);        // pal1 solid frame
-                else
-                    bg3map[ty * 32 + tx] = checker | (1 << 10);  // pal1 yellow checker
+                // Interior 2x2 repeat, matching play-area.png source map:
+                //   even row: odd col=7, even col=8;  odd row: odd col=4, even col=5.
+                u16 tile = (ty & 1) ? ((tx & 1) ? 4 : 5) : ((tx & 1) ? 7 : 8);
+                bg3map[ty * 32 + tx] = tile | (1 << 10); // palette 1
             }
     }
     bgSetGfxPtr(2, BG3_CHR);

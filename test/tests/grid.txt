@@ -1,0 +1,22 @@
+wait 40
+shot g1
+press down 6
+press down 6
+press down 6
+press down 6
+press a 8
+wait 12
+press down 6
+press down 6
+press down 6
+press down 6
+press a 8
+wait 12
+press down 6
+press down 6
+press down 6
+press down 6
+press a 8
+wait 12
+shot g2
+stop

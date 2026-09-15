@@ -8,4 +8,9 @@ blocktiles:
 .incbin "gfx/block_master.pic"
 blocktiles_end:
 
+; Play-area purple grid: 9 tiles (9-slice-ish), 4 colors. From play-area.png.
+gridtiles:
+.incbin "gfx/grid.pic"
+gridtiles_end:
+
 .ends
