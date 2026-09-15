@@ -81,23 +81,38 @@ extern char blocktiles, blocktiles_end;
 
 #define BG1_CHR 0x0000   // VRAM word addr of BG1 tiles (tile 0 = blank)
 #define BG1_MAP 0x5000   // VRAM word addr of BG1 tilemap (32x32)
+#define BG3_CHR 0x1000   // VRAM word addr of BG3 checker tiles (must be 0x1000-aligned)
+#define BG3_MAP 0x5800   // VRAM word addr of BG3 tilemap
 #define PF_TX 2          // playfield origin in 8x8 tiles (left)
 #define PF_TY 3          // playfield origin (top). 9x12 blocks = 18x24 tiles.
+
+// BG3 purple checker (bg index 2, 4-color). Two solid 8x8 2bpp tiles using
+// palette-0 indices 2 (light) and 3 (dark) -- the console font only uses index 1,
+// so no conflict. Source colors from tetris-game-bg.png.
+const u8 CHECKER_TILES[32] = {
+    0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF, // tile0: all index 2 (light)
+    0x00,0xFF,0x00,0xFF,0x00,0xFF,0x00,0xFF,
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF, // tile1: all index 3 (dark)
+    0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+};
+u16 bg3map[32 * 32];
 
 // SNES BGR15 color from 8-bit RGB
 #define RGB15(r, g, b) (((u16)((b) >> 3) << 10) | ((u16)((g) >> 3) << 5) | ((r) >> 3))
 
-// Per-color palettes sampled from tetris-blocks.png. IMPORTANT: the color order
-// MUST match how gfx4snes indexed the master tile's pixels, which is:
-//   idx0 = transparent(black outline), 1 = DARK, 2 = LIGHT, 3 = WHITE, 4 = MID.
+// Per-color palettes sampled from tetris-blocks.png. Order MUST match how
+// gfx4snes indexed the (transparency-reserved) master tile's pixels:
+//  idx0 = transparent, 1 = BLACK outline, 2 = DARK, 3 = LIGHT, 4 = WHITE, 5 = MID.
 // (Verified from block_master.pal.) Colors 0..4 -> palette slots 1..5.
-const u16 BLOCK_PAL[5][5] = {
-    //  0(transp)  1=dark             2=light             3=white              4=mid
-    {0, RGB15(107,0,0),    RGB15(255,16,16),   RGB15(252,252,252), RGB15(165,0,0)   }, // red
-    {0, RGB15(0,107,0),    RGB15(0,255,0),     RGB15(252,252,252), RGB15(0,180,0)   }, // green
-    {0, RGB15(125,62,242), RGB15(64,248,248),  RGB15(252,252,252), RGB15(152,96,255)}, // blue
-    {0, RGB15(248,120,0),  RGB15(248,248,0),   RGB15(252,252,252), RGB15(248,184,0) }, // yellow
-    {0, RGB15(248,0,144),  RGB15(248,128,184), RGB15(252,252,252), RGB15(248,24,96) }, // pink
+#define BLK RGB15(0, 0, 0)
+#define WHT RGB15(252, 252, 252)
+const u16 BLOCK_PAL[5][6] = {
+    //  0(transp) 1=black 2=dark            3=light             4=white 5=mid
+    {0, BLK, RGB15(107,0,0),    RGB15(255,16,16),   WHT, RGB15(165,0,0)   }, // red
+    {0, BLK, RGB15(0,107,0),    RGB15(0,255,0),     WHT, RGB15(0,180,0)   }, // green
+    {0, BLK, RGB15(125,62,242), RGB15(64,248,248),  WHT, RGB15(152,96,255)}, // blue
+    {0, BLK, RGB15(248,120,0),  RGB15(248,248,0),   WHT, RGB15(248,184,0) }, // yellow
+    {0, BLK, RGB15(248,0,144),  RGB15(248,128,184), WHT, RGB15(248,24,96) }, // pink
 };
 
 u16 bg1map[32 * 32];  // RAM copy of BG1 tilemap; DMA'd to VRAM on change
@@ -407,10 +422,24 @@ void gfxInit(void)
     // Load the 5 block palettes into CGRAM palette slots 1..5. NOTE:
     // setPaletteColor is a multi-statement macro -- braces are REQUIRED here.
     for (c = 0; c < 5; c++)
-        for (k = 0; k < 5; k++)
+        for (k = 0; k < 6; k++)
         {
             setPaletteColor((c + 1) * 16 + k, BLOCK_PAL[c][k]);
         }
+
+    // BG3 purple checker: tiles + palette-0 colors 2/3 + a checkered tilemap.
+    dmaCopyVram((u8 *)CHECKER_TILES, BG3_CHR, sizeof(CHECKER_TILES));
+    setPaletteColor(2, RGB15(125, 111, 201)); // light purple
+    setPaletteColor(3, RGB15(120, 89, 194));  // dark purple
+    {
+        u8 tx, ty;
+        for (ty = 0; ty < 32; ty++)
+            for (tx = 0; tx < 32; tx++)
+                bg3map[ty * 32 + tx] = ((tx + ty) & 1) ? 1 : 0; // dark/light, palette 0
+    }
+    bgSetGfxPtr(2, BG3_CHR);
+    bgSetMapPtr(2, BG3_MAP, SC_32x32);
+    dmaCopyVram((u8 *)bg3map, BG3_MAP, sizeof(bg3map));
 }
 
 void drawStatic(void)
@@ -484,9 +513,12 @@ int main(void)
     consoleInitDefaultText(0);
     bgSetGfxPtr(0, 0x3000);
     bgSetMapPtr(0, 0x6800, SC_32x32);
-    gfxInit();          // BG1 block tiles + palettes
+    gfxInit();          // BG1 block tiles + palettes + BG3 purple checker
     setMode(BG_MODE1, 0);
-    bgSetDisable(2);    // keep BG0 (text) + BG1 (blocks); disable BG2
+    // All three layers on: BG0 text (HUD), BG1 blocks, BG3 purple checker.
+    bgSetEnable(0);
+    bgSetEnable(1);
+    bgSetEnable(2);
 
     srand(0x1234); // fixed seed for now (deterministic); randomize in a later phase
     startGame();
