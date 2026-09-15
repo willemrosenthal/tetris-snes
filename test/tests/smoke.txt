@@ -1,0 +1,4 @@
+# minimal smoke test: boot, screenshot, stop
+wait 40
+shot 01_boot
+stop

@@ -1,0 +1,31 @@
+# Phase 2 regression: move / rotate / place+cycle / overlap-reject.
+# Uses generous timing (holds >=10, wait before shots).
+wait 40
+shot 01_boot            # L-piece (R) at top-center, PLACE: OK
+
+# Move right 3, down 3
+press right 10
+press right 10
+press right 10
+press down 10
+press down 10
+press down 10
+wait 10
+shot 02_moved
+
+# Rotate CW twice
+press r 10
+press r 10
+wait 10
+shot 03_rotated
+
+# Place (A) -> becomes lowercase; next piece (G) spawns top-center
+press a 10
+wait 12
+shot 04_placed
+
+# New piece spawns ON the just-placed cells -> overlap; try to place -> rejected
+press a 10
+wait 12
+shot 05_reject          # should be unchanged from 04's active-piece state
+stop

@@ -1,0 +1,9 @@
+# Overlap-rejection test with generous timing.
+wait 40
+press a 10
+wait 12
+shot e1_overlap     # R placed; G spawns on same cells -> PLACE: NO
+press a 10
+wait 12
+shot e2_reject      # reject -> should equal e1 (still G, PLACE: NO, no new piece)
+stop
