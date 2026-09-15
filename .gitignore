@@ -1,0 +1,10 @@
+# PVSnesLib build artifacts
+*.obj
+*.o
+*.sfc
+*.smc
+*.sym
+*.symfull
+*.log
+*.ps
+build/
