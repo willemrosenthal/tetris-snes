@@ -8,15 +8,28 @@ blocktiles:
 .incbin "gfx/block_master.pic"
 blocktiles_end:
 
-; Play-area purple grid: 9 tiles (9-slice-ish), 4 colors. From play-area.png.
-gridtiles:
-.incbin "gfx/grid.pic"
-gridtiles_end:
+; Pixel-accurate background SCENE (16-color, 4bpp): real checker (tetris-game-bg)
+; + play-area grid (play-area.png, with top/left shadow) + 5px blue/white/cyan
+; frame (play-area-frame.png). 23 reduced tiles + full 32x28 tilemap.
+scenetiles:
+.incbin "gfx/scene.pic"
+scenetiles_end:
 
-; Play-area frame nine-patch: 10 tiles (TL,T,TR,L,C,R,BL,B,BR,blank), 2bpp.
-; Derived from play-area-frame.png colors (field/blue/cyan).
-frametiles:
-.incbin "gfx/frame9.pic"
-frametiles_end:
+scenemap:
+.incbin "gfx/scene.map"
+scenemap_end:
+
+scenepal:
+.incbin "gfx/scene.pal"
+scenepal_end:
+
+; 2bpp HUD font (96 ASCII glyphs from space) for the console on BG3 (4-color).
+font2tiles:
+.incbin "gfx/font2.pic"
+font2tiles_end:
+
+font2pal:
+.incbin "gfx/font2.pal"
+font2pal_end:
 
 .ends
