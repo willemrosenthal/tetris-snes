@@ -5,6 +5,11 @@
       - D-pad moves the active piece around the 9x12 grid (kept in-bounds).
       - L / Y rotate CCW, R / X rotate CW (matches TetrisGamepadControls).
       - A places the piece on empty cells; overlaps are rejected.
+    Phase 3: match detection + clearing + scoring (ports GetLinkedBlocks +
+      TetrisBlockBreaker). On placement, any horizontal or vertical run of >=3
+      same-color blocks clears. Score: 50 per block, +100 per block beyond 3 in
+      one clear event. (Wild/bomb + real multi-color pieces come in Phase 4; the
+      single-color L placeholder self-clears its vertical run of 3 on placement.)
     Rendering still uses the text console (tile/sprite art comes in Phase 5):
       placed blocks = lowercase color letters, active piece = uppercase,
       '*' marks a cell where the active piece overlaps a placed block.
@@ -35,7 +40,8 @@ s8 curX[4], curY[4]; // current (possibly rotated) offsets
 int pieceX, pieceY;  // anchor cell on the grid
 u8 pieceColor;       // 0..NUM_COLORS-1
 
-u8 dirty; // redraw grid interior when set
+u8 dirty;    // redraw grid interior when set
+u16 score;   // player score
 
 //---------------------------------------------------------------------------------
 // True if every piece cell (anchor + offsets) sits inside the grid.
@@ -150,6 +156,63 @@ void tryRotate(int dir)
     dirty = 1;
 }
 
+// Clear any horizontal or vertical run of >=3 same-color blocks, and score it.
+// The board never holds a >=3 run at rest (they always clear on the placement
+// that forms them), so a full-board scan finds exactly the runs this placement
+// created -- equivalent to the Unity flood from the placed block, but simpler.
+void resolveMatches(void)
+{
+    u8 clear[GRID_W][GRID_H];
+    u8 x, y, run, c, i;
+    u16 n = 0;
+
+    for (x = 0; x < GRID_W; x++)
+        for (y = 0; y < GRID_H; y++)
+            clear[x][y] = 0;
+
+    // Horizontal runs
+    for (y = 0; y < GRID_H; y++)
+    {
+        x = 0;
+        while (x < GRID_W)
+        {
+            c = field[x][y];
+            if (c == EMPTY) { x++; continue; }
+            run = 1;
+            while (x + run < GRID_W && field[x + run][y] == c) run++;
+            if (run >= 3)
+                for (i = 0; i < run; i++) clear[x + i][y] = 1;
+            x += run;
+        }
+    }
+    // Vertical runs
+    for (x = 0; x < GRID_W; x++)
+    {
+        y = 0;
+        while (y < GRID_H)
+        {
+            c = field[x][y];
+            if (c == EMPTY) { y++; continue; }
+            run = 1;
+            while (y + run < GRID_H && field[x][y + run] == c) run++;
+            if (run >= 3)
+                for (i = 0; i < run; i++) clear[x][y + i] = 1;
+            y += run;
+        }
+    }
+
+    for (x = 0; x < GRID_W; x++)
+        for (y = 0; y < GRID_H; y++)
+            if (clear[x][y]) { field[x][y] = EMPTY; n++; }
+
+    if (n > 0)
+    {
+        score += n * 50;              // 50 per block (TetrisBlock.Break)
+        if (n > 3) score += (n - 3) * 100; // combo bonus (TetrisBlockBreaker)
+        dirty = 1;
+    }
+}
+
 void placePiece(void)
 {
     u8 i;
@@ -158,11 +221,25 @@ void placePiece(void)
     for (i = 0; i < 4; i++)
         field[pieceX + curX[i]][pieceY + curY[i]] = pieceColor + 1;
 
+    resolveMatches();
     pieceColor = (pieceColor + 1) % NUM_COLORS; // cycle so the grid shows variety
     resetPiece();
 }
 
 //---------------------------------------------------------------------------------
+// consoleDrawText's %d is unreliable in this PVSnesLib build, so format digits
+// manually into a zero-padded string and print with %s.
+void formatNum(u16 n, char *buf, u8 digits)
+{
+    buf[digits] = 0;
+    while (digits > 0)
+    {
+        digits--;
+        buf[digits] = '0' + (n % 10);
+        n /= 10;
+    }
+}
+
 void drawStatic(void)
 {
     u8 y;
@@ -209,6 +286,13 @@ void drawGrid(void)
     // Placement status line
     consoleDrawText(GRID_X - 1, GRID_Y + GRID_H + 2,
                     canPlace() ? "PLACE: OK " : "PLACE: NO ");
+
+    // Score
+    {
+        char sbuf[7];
+        formatNum(score, sbuf, 6);
+        consoleDrawText(1, 3, "SCORE %s", sbuf);
+    }
 }
 
 //---------------------------------------------------------------------------------
@@ -225,6 +309,7 @@ int main(void)
 
     clearField();
     pieceColor = 0;
+    score = 0;
     resetPiece();
     drawStatic();
     setScreenOn();
