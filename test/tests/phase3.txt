@@ -1,12 +1,12 @@
-# Phase 3: match detection + scoring
+# Phase 3: 2x2 placeholder. Placement keeps all 4; adjacent squares -> match.
 wait 40
-shot t1_empty        # SCORE 000000, R piece at top, empty grid
+shot t1_spawn         # blue 2x2 at spawn, SCORE 000000
+press a 12
+press right 12
+press right 12
+wait 14
+shot t2_placed1       # square A placed (4 blue), square B active 2 cols right, SCORE 000000
 press a 12
 wait 14
-shot t2_vmatch       # vertical 3 red cleared -> SCORE 000150, red foot remains, G active
-press r 12           # rotate G to a horizontal 3-bar
-wait 8
-press a 12
-wait 14
-shot t3_hmatch       # horizontal 3 green cleared -> SCORE 000300
+shot t3_match         # A+B form rows of 4 -> clear 8 -> SCORE 000900 (8*50 + 5*100)
 stop

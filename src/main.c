@@ -8,8 +8,11 @@
     Phase 3: match detection + clearing + scoring (ports GetLinkedBlocks +
       TetrisBlockBreaker). On placement, any horizontal or vertical run of >=3
       same-color blocks clears. Score: 50 per block, +100 per block beyond 3 in
-      one clear event. (Wild/bomb + real multi-color pieces come in Phase 4; the
-      single-color L placeholder self-clears its vertical run of 3 on placement.)
+      one clear event. (Wild/bomb + real multi-color pieces come in Phase 4.)
+      Placeholder piece is a single-color 2x2 square: it never self-clears (no
+      run of 3 within it), so placement is visible and you build matches across
+      pieces. Rotation has no visible effect on a square (it was verified on the
+      L in Phase 2).
     Rendering still uses the text console (tile/sprite art comes in Phase 5):
       placed blocks = lowercase color letters, active piece = uppercase,
       '*' marks a cell where the active piece overlaps a placed block.
@@ -30,10 +33,11 @@ u8 field[GRID_W][GRID_H];
 const char PLACED_CH[NUM_COLORS] = {'r', 'g', 'b', 'y', 'p', 'c', 'o'};
 const char ACTIVE_CH[NUM_COLORS] = {'R', 'G', 'B', 'Y', 'P', 'C', 'O'};
 
-// Base shape (L-tetromino), offsets from the piece anchor. Asymmetric so
-// rotation is clearly visible. Phase 4 replaces this with real piece data.
-const s8 BASE_X[4] = {0, 0, 0, 1};
-const s8 BASE_Y[4] = {-1, 0, 1, 1};
+// Base shape: a 2x2 square (O). No run of 3 within it, so it never self-clears
+// -- placement stays visible and matches are built across pieces. Phase 4
+// replaces this with real (multi-color) piece data extracted from the prefabs.
+const s8 BASE_X[4] = {0, 1, 0, 1};
+const s8 BASE_Y[4] = {0, 0, 1, 1};
 
 // Active piece state
 s8 curX[4], curY[4]; // current (possibly rotated) offsets
@@ -222,7 +226,8 @@ void placePiece(void)
         field[pieceX + curX[i]][pieceY + curY[i]] = pieceColor + 1;
 
     resolveMatches();
-    pieceColor = (pieceColor + 1) % NUM_COLORS; // cycle so the grid shows variety
+    // Phase 3 placeholder: keep one fixed color so same-color runs can actually
+    // be built up by hand. Phase 4 gives pieces real (multi-)colors.
     resetPiece();
 }
 
@@ -308,7 +313,7 @@ int main(void)
     bgSetDisable(2);
 
     clearField();
-    pieceColor = 0;
+    pieceColor = 2; // blue placeholder (fixed for Phase 3)
     score = 0;
     resetPiece();
     drawStatic();
