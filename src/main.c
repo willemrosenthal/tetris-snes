@@ -230,13 +230,15 @@ void tryRotate(int dir)
 // return early), but they are swept up into a run they help complete.
 #define MATCHES(cell, v) ((cell) == (v) || (cell) == WILD)
 
-// Clear horizontal/vertical runs of >=3 (same color, wilds acting as bridges),
-// but only runs including at least one block NOT just placed (so a piece can't
-// clear against itself).
+// Clear horizontal/vertical runs of >=3 (same color, wilds acting as bridges).
+// A run clears only if it CONNECTS the just-placed piece to existing blocks:
+// it must contain at least one just-placed cell AND at least one pre-existing
+// cell. (A run wholly inside the new piece can't self-clear; a run of only old
+// blocks that the new piece didn't touch is left alone.)
 void resolveMatches(void)
 {
     u8 clear[GRID_W][GRID_H];
-    u8 x, y, v, hasOld;
+    u8 x, y, v, hasOld, hasNew;
     int a, b, i;
     u16 n = 0;
 
@@ -254,9 +256,10 @@ void resolveMatches(void)
             while (b + 1 < GRID_W && MATCHES(field[b + 1][y], v)) b++;
             if (b - a + 1 >= 3)
             {
-                hasOld = 0;
-                for (i = a; i <= b; i++) if (!justPlaced[i][y]) { hasOld = 1; break; }
-                if (hasOld) for (i = a; i <= b; i++) clear[i][y] = 1;
+                hasOld = hasNew = 0;
+                for (i = a; i <= b; i++)
+                    if (justPlaced[i][y]) hasNew = 1; else hasOld = 1;
+                if (hasOld && hasNew) for (i = a; i <= b; i++) clear[i][y] = 1;
             }
         }
 
@@ -270,9 +273,10 @@ void resolveMatches(void)
             while (b + 1 < GRID_H && MATCHES(field[x][b + 1], v)) b++;
             if (b - a + 1 >= 3)
             {
-                hasOld = 0;
-                for (i = a; i <= b; i++) if (!justPlaced[x][i]) { hasOld = 1; break; }
-                if (hasOld) for (i = a; i <= b; i++) clear[x][i] = 1;
+                hasOld = hasNew = 0;
+                for (i = a; i <= b; i++)
+                    if (justPlaced[x][i]) hasNew = 1; else hasOld = 1;
+                if (hasOld && hasNew) for (i = a; i <= b; i++) clear[x][i] = 1;
             }
         }
 
@@ -364,6 +368,7 @@ void startGame(void)
     spawnPiece();     // first piece is free
     hasActive = 1;
     dirty = 1;
+
 }
 
 //---------------------------------------------------------------------------------
