@@ -774,12 +774,17 @@ int main(void)
         renderReticle();         // reticle + bomb sprite + pop (OAM), every frame
 
         WaitForVBlank();
-        cycleWild();             // wild rainbow via palette (CGRAM), every frame
+        // Never do the big block-map DMA AND the palette write in the same vblank
+        // -- together they overrun into active display (garbled blocks / color
+        // flashes while moving). Do the DMA on change frames, cycle the wild
+        // palette on the frames between (still flashes plenty fast).
         if (dirty)
         {
             dmaCopyVram((u8 *)bg1map, BLK_MAP, sizeof(bg1map));
             dirty = 0;
         }
+        else
+            cycleWild();         // wild rainbow via palette (CGRAM)
     }
     return 0;
 }
